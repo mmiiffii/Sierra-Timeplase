@@ -6,8 +6,6 @@ from datetime import datetime
 IMAGE_URL = "https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg"
 SAVE_FOLDER = "images"
 
-# Create folder if it doesn't exist
-os.makedirs(SAVE_FOLDER, exist_ok=True)
 
 # Generate a timestamped filename
 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
