@@ -23,11 +23,6 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Ensure images folder exists
-        run: |
-          rm -f images   # remove if it's a file
-          mkdir -p images
-
       - name: Run script
         run: python download_image.py
 
