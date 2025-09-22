@@ -1,0 +1,37 @@
+name: Download Camera Image
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"  # every 6 hours
+  workflow_dispatch:        # allows manual trigger
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Ensure images folder exists
+        run: |
+          rm -f images   # remove if it's a file
+          mkdir -p images
+
+      - name: Run script
+        run: python download_image.py
+
+      - name: Commit and push new image
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add images/
+          git commit -m "Add new image snapshot" || echo "No changes to commit"
+          git push
