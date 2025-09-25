@@ -1,0 +1,40 @@
+name: Download Camera Image Every 10 Minutes
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"   # every 10 minutes
+  workflow_dispatch:        # allows manual trigger
+
+permissions:
+  contents: write   # allow workflow to push new images
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Ensure images_10min folder exists
+        run: |
+          rm -f images_10min   # remove if it's a file
+          mkdir -p images_10min
+
+      - name: Run script
+        run: python download_image_10min.py
+
+      - name: Commit and push new image
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add images_10min/
+          git commit -m "Add new 10-min image snapshot" || echo "No changes to commit"
+          git push
