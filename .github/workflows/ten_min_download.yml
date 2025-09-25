@@ -23,11 +23,6 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Ensure images_10min folder exists
-        run: |
-          rm -f images_10min   # remove if it's a file
-          mkdir -p images_10min
-
       - name: Run script
         run: python download_image_10min.py
 
