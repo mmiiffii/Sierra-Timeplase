@@ -24,7 +24,7 @@ jobs:
         run: pip install requests
 
       - name: Run script
-        run: python download_image.py
+        run: python daily_downloader.py
 
       - name: Commit and push new image
         run: |
