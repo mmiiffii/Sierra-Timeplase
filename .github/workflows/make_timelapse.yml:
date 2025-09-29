@@ -1,0 +1,33 @@
+name: Generate Timelapse Video
+
+on:
+  workflow_dispatch:        # manual trigger
+
+permissions:
+  contents: write           # allow committing the video
+
+jobs:
+  timelapse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Generate timelapse
+        run: python make_timelapse.py
+
+      - name: Commit and push timelapse
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add timelapse_*.mp4
+          git commit -m "Add new timelapse video" || echo "No changes to commit"
+          git push
