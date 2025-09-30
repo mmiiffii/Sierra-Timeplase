@@ -1,0 +1,34 @@
+name: Download Camera Image In-between 10min
+
+on:
+  schedule:
+    - cron: "5,15,25,35,45,55 * * * *"   # halfway points
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install -r requirements.txt
+
+      - name: Ensure folder exists
+        run: mkdir -p images_inbetween
+
+      - name: Download image
+        run: python download_image_inbetween.py
+
+      - name: Commit and push
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add images_inbetween/
+          git commit -m "Add in-between snapshot" || echo "No changes"
+          git push
