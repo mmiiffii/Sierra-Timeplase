@@ -5,7 +5,12 @@ from datetime import datetime
 
 # === Config ===
 FOLDERS = ["images_10min", "images_inbetween"]
-OUTPUT_VIDEO = f"timelapse_combined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.mp4"
+OUTPUT_DIR = "timelapses"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_VIDEO = os.path.join(
+    OUTPUT_DIR, f"timelapse_combined_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.mp4"
+)
 FPS = 24
 
 # Collect all images from both folders
