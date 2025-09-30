@@ -1,0 +1,32 @@
+name: Build Combined Timelapse
+
+on:
+  workflow_dispatch:   # only manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  timelapse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - run: pip install -r requirements.txt
+
+      - name: Ensure timelapses folder exists
+        run: mkdir -p timelapses
+
+      - name: Generate combined timelapse
+        run: python make_timelapse_combined.py
+
+      - name: Commit and push timelapse
+        run: |
+          git config --local user.email "actions@github.com"
+          git config --local user.name "GitHub Actions"
+          git add timelapses/
+          git commit -m "Add combined timelapse video" || echo "No changes"
+          git push
