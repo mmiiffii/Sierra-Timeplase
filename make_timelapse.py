@@ -6,7 +6,7 @@ from datetime import datetime
 # === Configuration ===
 IMAGE_FOLDER = "images_10min"
 OUTPUT_VIDEO = f"timelapse_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.mp4"
-FPS = 12
+FPS = 24
 
 # Get all jpg images sorted by filename (timestamp in name)
 images = sorted(glob(os.path.join(IMAGE_FOLDER, "*.jpg")))
