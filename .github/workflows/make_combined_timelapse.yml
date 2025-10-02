@@ -23,10 +23,9 @@ jobs:
       - name: Generate combined timelapse
         run: python make_timelapse_combined.py
 
-      - name: Commit and push timelapse
-        run: |
-          git config --local user.email "actions@github.com"
-          git config --local user.name "GitHub Actions"
-          git add timelapses/
-          git commit -m "Add combined timelapse video" || echo "No changes"
-          git push
+      - name: Upload timelapse as release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: timelapses/timelapse_combined_*.mp4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
