@@ -23,9 +23,15 @@ jobs:
       - name: Generate combined timelapse
         run: python make_timelapse_combined.py
 
-      - name: Upload timelapse as release asset
+      - name: Get timestamp for tag
+        id: tag
+        run: echo "tag=timelapse-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release and upload timelapse
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Timelapse ${{ steps.tag.outputs.tag }}"
           files: timelapses/timelapse_combined_*.mp4
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
