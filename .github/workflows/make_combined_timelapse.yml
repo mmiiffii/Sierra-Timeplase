@@ -1,7 +1,7 @@
 name: Build Combined Timelapse
 
 on:
-  workflow_dispatch:   # only run manually
+  workflow_dispatch:   # only manual trigger
 
 permissions:
   contents: write
@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -26,7 +26,21 @@ jobs:
         run: rm -rf timelapses && mkdir -p timelapses
 
       - name: Generate combined timelapse video
-        run: python make_timelapse_combined.py
+        id: build
+        run: |
+          python make_timelapse_combined.py | tee build_log.txt
+          used=$(grep "Used" build_log.txt | awk '{print $2}')
+          skipped=$(grep "skipped" build_log.txt | awk '{print $6}')
+          echo "frames_used=$used" >> $GITHUB_OUTPUT
+          echo "frames_skipped=$skipped" >> $GITHUB_OUTPUT
+
+      - name: Add summary
+        run: |
+          echo "## 🎞️ Combined Timelapse Summary" >> $GITHUB_STEP_SUMMARY
+          echo "**Frames used:** ${{ steps.build.outputs.frames_used }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Frames skipped:** ${{ steps.build.outputs.frames_skipped }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Video generated successfully and ready for release upload." >> $GITHUB_STEP_SUMMARY
 
       - name: Create unique tag for release
         id: tag
