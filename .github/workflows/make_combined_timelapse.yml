@@ -1,7 +1,7 @@
 name: Build Combined Timelapse
 
 on:
-  workflow_dispatch:   # only manual trigger
+  workflow_dispatch:   # only run manually
 
 permissions:
   contents: write
@@ -9,25 +9,30 @@ permissions:
 jobs:
   timelapse:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.x"
 
-      - run: pip install -r requirements.txt
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-      - name: Ensure timelapses folder exists
-        run: mkdir -p timelapses
+      - name: Clean timelapses folder
+        run: rm -rf timelapses && mkdir -p timelapses
 
-      - name: Generate combined timelapse
+      - name: Generate combined timelapse video
         run: python make_timelapse_combined.py
 
-      - name: Get timestamp for tag
+      - name: Create unique tag for release
         id: tag
         run: echo "tag=timelapse-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
 
-      - name: Create GitHub Release and upload timelapse
+      - name: Upload timelapse to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
