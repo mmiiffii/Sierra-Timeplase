@@ -1,0 +1,74 @@
+name: Capture Webcam Image (5-Minute Interval)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes
+  workflow_dispatch:         # allows manual trigger
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: capture_job
+      cancel-in-progress: true   # prevents overlap if a run is delayed
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --quiet requests pillow piexif
+
+      - name: Capture image
+        run: |
+          python3 - <<'PYCODE'
+          import requests, os, datetime, piexif
+          from io import BytesIO
+
+          IMAGE_URL = "https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg"
+          SAVE_DIR = "images_5min"
+          os.makedirs(SAVE_DIR, exist_ok=True)
+
+          def get_exif_timestamp(image_bytes):
+              try:
+                  exif = piexif.load(image_bytes)
+                  dt = exif["0th"].get(piexif.ImageIFD.DateTime)
+                  if dt:
+                      return datetime.datetime.strptime(dt.decode(), "%Y:%m:%d %H:%M:%S")
+              except Exception:
+                  pass
+              return None
+
+          r = requests.get(IMAGE_URL, timeout=20)
+          if r.status_code == 200:
+              exif_time = get_exif_timestamp(r.content)
+              now = datetime.datetime.utcnow()
+              ts = exif_time or now
+              fname = ts.strftime("image_%Y%m%d_%H%M%S.jpg")
+              path = os.path.join(SAVE_DIR, fname)
+              with open(path, "wb") as f:
+                  f.write(r.content)
+              print(f"✅ Saved {path}")
+          else:
+              print(f"❌ HTTP error {r.status_code}")
+          PYCODE
+
+      - name: Commit and push image
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add images_5min/
+          git commit -m "Add image" || echo "No changes"
+          git push
