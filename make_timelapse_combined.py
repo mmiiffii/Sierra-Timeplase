@@ -7,7 +7,7 @@ from glob import glob
 from datetime import datetime
 
 # === Configurable thresholds (tweak if needed) ===
-FOLDERS = ["images_10min", "images_inbetween"]
+FOLDERS = ["images_10min", "images_inbetween", "images_5min"]
 OUTPUT_DIR = "timelapses"
 FPS = 24
 
