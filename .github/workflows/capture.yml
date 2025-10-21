@@ -2,7 +2,7 @@ name: Capture Webcam Image (5-Minute Interval)
 
 on:
   schedule:
-    - cron: "*/4 * * * *"   # every 4 minutes
+    - cron: "*/2 * * * *"   # every 2 minutes
   workflow_dispatch:         # allows manual trigger
 
 jobs:
