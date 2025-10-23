@@ -39,7 +39,7 @@ LONGITUDE = -3.3920
 TIMEZONE = "Europe/Madrid"
 
 # How many minutes before sunrise to start
-MINUTES_BEFORE_SUNRISE = 100
+MINUTES_BEFORE_SUNRISE = 300
 
 # Bad-frame detection thresholds (tweak if needed)
 MIN_DIM = 100
