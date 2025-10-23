@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>GitHub Timelapse Generator</title>
+  <style>body{font-family:sans-serif;max-width:600px;margin:2em auto;}</style>
+</head>
+<body>
+  <h2>Generate Timelapse</h2>
+  <label>Start time: <input type="datetime-local" id="start"></label><br>
+  <label>End time: <input type="datetime-local" id="end"></label><br>
+  <label>FPS: <input type="number" id="fps" value="24"></label><br><br>
+  <button id="run">Generate</button>
+  <p id="status"></p>
+
+  <script>
+    const owner = "YOUR_GITHUB_USERNAME";
+    const repo = "YOUR_REPO_NAME";
+    const workflow = "generate_timelapse.yml";
+    const token = "YOUR_GITHUB_PAT"; // can store this as a GitHub secret instead of hardcoding
+
+    async function runWorkflow() {
+      const start = document.getElementById("start").value;
+      const end = document.getElementById("end").value;
+      const fps = document.getElementById("fps").value;
+      const status = document.getElementById("status");
+      status.innerText = "Starting workflow...";
+
+      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches`, {
+        method: "POST",
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "Authorization": `token ${token}`,
+        },
+        body: JSON.stringify({
+          ref: "main",
+          inputs: { start_time: start, end_time: end, fps: fps }
+        })
+      });
+
+      if (res.ok) {
+        status.innerText = "Workflow started! You can monitor it in GitHub Actions.";
+      } else {
+        const err = await res.text();
+        status.innerText = "Error: " + err;
+      }
+    }
+
+    document.getElementById("run").addEventListener("click", runWorkflow);
+  </script>
+</body>
+</html>
