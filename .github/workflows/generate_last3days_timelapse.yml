@@ -1,0 +1,69 @@
+name: Generate Timelapse — Last 3 Full Days (start before sunrise)
+
+on:
+  workflow_dispatch:   # manual trigger only
+
+permissions:
+  contents: write
+
+concurrency:
+  group: generate-timelapse-last3
+  cancel-in-progress: true
+
+jobs:
+  build-timelapse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure timelapses dir
+        run: mkdir -p timelapses
+
+      - name: Generate timelapse (last 3 full days)
+        id: generate
+        run: |
+          python scripts/generate_timelapse_last3days.py | tee generate.log
+          # pull out used/skipped totals for summary
+          used=$(grep "Used" generate.log | awk '{print $2}' || true)
+          skipped=$(grep "skipped" generate.log | awk '{print $4}' || true)
+          echo "frames_used=${used:-0}" >> $GITHUB_OUTPUT
+          echo "frames_skipped=${skipped:-0}" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        id: tag
+        run: echo "tag=timelapse-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Upload timelapse to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Timelapse ${{ steps.tag.outputs.tag }}"
+          files: timelapses/timelapse_last3days_*.mp4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Action summary
+        if: always()
+        run: |
+          echo "## Timelapse generation summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Frames used: ${{ steps.generate.outputs.frames_used }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Frames skipped: ${{ steps.generate.outputs.frames_skipped }}" >> $GITHUB_STEP_SUMMARY
