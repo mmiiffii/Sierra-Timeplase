@@ -8,7 +8,7 @@ ROOT_DIR="$(pwd)"
 IMAGES_DIR="$ROOT_DIR/images"
 
 # Change to false to actually move files
-DRY_RUN=true
+DRY_RUN=false
 
 # Also remove now-empty subdirectories under /images after moves
 DELETE_EMPTY_DIRS=false
