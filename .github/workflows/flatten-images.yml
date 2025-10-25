@@ -1,0 +1,159 @@
+name: Flatten Images Into /images (with audit + CSV)
+
+on:
+  workflow_dispatch:  # manual trigger from GitHub UI
+
+permissions:
+  contents: write  # needed to push commits
+
+jobs:
+  flatten:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Flatten images and create audits
+        id: flatten
+        run: |
+          python3 - <<'PYCODE'
+          import os, shutil, time, csv
+          from pathlib import Path
+          from collections import Counter
+
+          ROOT = Path(".").resolve()
+          IMAGES = ROOT / "images"
+          IMAGES.mkdir(parents=True, exist_ok=True)
+
+          EXTS = {".jpg",".jpeg",".png",".gif",".webp",".tif",".tiff",".bmp"}
+          ts = time.strftime("%Y%m%d_%H%M%S")
+          audit_txt = IMAGES / f"flatten_audit_{ts}.txt"
+          audit_csv = IMAGES / f"flatten_audit_{ts}.csv"
+
+          def is_image(p): return p.is_file() and p.suffix.lower() in EXTS
+
+          def under_images_root(p):
+              try: return p.parent == IMAGES
+              except Exception: return False
+
+          def under_images_any(p):
+              try: p.relative_to(IMAGES); return True
+              except ValueError: return False
+
+          print("🔍 Scanning repository for images...")
+          all_images_before = [p for p in ROOT.rglob("*") if is_image(p) and ".git" not in p.parts]
+          ext_count_before = Counter(p.suffix.lower() for p in all_images_before)
+
+          in_images_root_before   = [p for p in all_images_before if under_images_root(p)]
+          in_images_nested_before = [p for p in all_images_before if under_images_any(p) and not under_images_root(p)]
+          outside_images_before   = [p for p in all_images_before if not under_images_any(p)]
+
+          candidates = list(set(outside_images_before + in_images_nested_before))
+          moved, renamed_count = [], 0
+
+          def dest_for(src: Path):
+              base = src.name
+              dest = IMAGES / base
+              if not dest.exists():
+                  return dest, False
+              parent = src.parent.name or "root"
+              stem, ext = src.stem, src.suffix
+              i = 1
+              while True:
+                  cand = IMAGES / f"{stem}_from_{parent}_{i}{ext}"
+                  if not cand.exists():
+                      return cand, True
+                  i += 1
+
+          for src in sorted(candidates):
+              dest, renamed = dest_for(src)
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              try:
+                  import subprocess
+                  subprocess.run(["git","mv","-k",str(src),str(dest)], check=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              except Exception:
+                  shutil.move(str(src), str(dest))
+              moved.append((src, dest))
+              if renamed: renamed_count += 1
+
+          all_images_after = [p for p in ROOT.rglob("*") if is_image(p) and ".git" not in p.parts]
+          ext_count_after = Counter(p.suffix.lower() for p in all_images_after)
+
+          in_images_root_after   = [p for p in all_images_after if under_images_root(p)]
+          in_images_nested_after = [p for p in all_images_after if under_images_any(p) and not under_images_root(p)]
+          outside_images_after   = [p for p in all_images_after if not under_images_any(p)]
+
+          # ---------- TEXT AUDIT ----------
+          lines = []
+          lines.append("FLATTEN IMAGES AUDIT")
+          lines.append(f"Timestamp (UTC): {ts}\n")
+          lines.append("=== COUNTS BEFORE ===")
+          lines.append(f"Total images: {len(all_images_before)}")
+          lines.append(f"  In /images (root):    {len(in_images_root_before)}")
+          lines.append(f"  In /images (nested):  {len(in_images_nested_before)}")
+          lines.append(f"  Outside /images:      {len(outside_images_before)}")
+          lines.append("By extension:")
+          for ext,c in sorted(ext_count_before.items()):
+              lines.append(f"  {ext}: {c}")
+          lines.append("")
+          lines.append("=== ACTION ===")
+          lines.append(f"Files considered: {len(candidates)}")
+          lines.append(f"Files moved:      {len(moved)}")
+          lines.append(f"Collision renames:{renamed_count}\n")
+          lines.append("=== COUNTS AFTER ===")
+          lines.append(f"Total images: {len(all_images_after)}")
+          lines.append(f"  In /images (root):    {len(in_images_root_after)}")
+          lines.append(f"  In /images (nested):  {len(in_images_nested_after)}")
+          lines.append(f"  Outside /images:      {len(outside_images_after)}")
+          lines.append("By extension:")
+          for ext,c in sorted(ext_count_after.items()):
+              lines.append(f"  {ext}: {c}")
+          lines.append("\n=== MOVED FILES ===")
+          if moved:
+              for s,d in moved: lines.append(f"{s} -> {d}")
+          else:
+              lines.append("(none)")
+          lines.append("\nNotes:")
+          lines.append("• Only image files were moved.")
+          lines.append("• Empty folders were left in place.")
+          lines.append("• Collisions create new names like _from_<parent>_<n>.")
+          lines.append("")
+
+          audit_txt.write_text("\n".join(lines), encoding="utf-8")
+          print(f"📝 Wrote audit TXT: {audit_txt}")
+
+          # ---------- CSV AUDIT ----------
+          with open(audit_csv, "w", newline="", encoding="utf-8") as f:
+              w = csv.writer(f)
+              w.writerow(["source_path","destination_path"])
+              for s,d in moved: w.writerow([s,d])
+          print(f"🗂️  Wrote audit CSV: {audit_csv}")
+
+          print(f"::set-output name=moved::{len(moved)}")
+          print(f"::set-output name=renamed::{renamed_count}")
+          print(f"::set-output name=total_after::{len(all_images_after)}")
+          PYCODE
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add images/
+          git commit -m "Flatten images into /images (with audit + CSV)" || echo "No changes"
+          git push
+
+      - name: Summary
+        run: |
+          echo "## Flatten Images Audit" >> $GITHUB_STEP_SUMMARY
+          echo "- Files moved: ${{ steps.flatten.outputs.moved }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Collision renames: ${{ steps.flatten.outputs.renamed }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Total images after: ${{ steps.flatten.outputs.total_after }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Audit files written to:** images/flatten_audit_*.txt and images/flatten_audit_*.csv" >> $GITHUB_STEP_SUMMARY
