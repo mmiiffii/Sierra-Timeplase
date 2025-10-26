@@ -1,7 +1,7 @@
 name: Rename Images in /images (uniform: image_YYMMDD_HHMMSS)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # only manual trigger
 
 permissions:
   contents: write
