@@ -1,4 +1,4 @@
-name: Rename Images in /images (uniform: image_YYMMDD_HHMMSS)
+name: Rename Images
 
 on:
   workflow_dispatch:  # only manual trigger
