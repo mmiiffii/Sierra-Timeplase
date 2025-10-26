@@ -1,0 +1,38 @@
+name: Generate Timelapse — Last 7 Days
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read  # we only read code; no commit
+
+jobs:
+  timelapse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure output dir
+        run: mkdir -p timelapses
+
+      - name: Build 7-day timelapse
+        run: |
+          python scripts/generate_timelapse_last7days.py
+
+      - name: Upload timelapse artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: timelapse_last7days
+          path: timelapses/timelapse_last7days_*.mp4
+          if-no-files-found: error
