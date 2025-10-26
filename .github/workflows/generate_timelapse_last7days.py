@@ -7,7 +7,7 @@ Sources:
   - images_5min/    (legacy folder at repo root)
 
 Window:
-  - last full 7 days, starting 5 minutes before sunrise on the earliest day
+  - last full 7 days, starting 250 minutes before sunrise on the earliest day
 Output:
   - timelapses/timelapse_last7days_<startLocal>_<endUTC>_<fps>fps.mp4
 """
@@ -26,7 +26,7 @@ REGION_NAME   = "Spain"
 LATITUDE      = 37.0870
 LONGITUDE     = -3.3920
 TIMEZONE      = "Europe/Madrid"
-MINUTES_BEFORE_SUNRISE = 5
+MINUTES_BEFORE_SUNRISE = 250
 
 # ---- Inputs (folders) ----
 IMAGES_ROOT = Path("images")
