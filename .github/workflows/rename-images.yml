@@ -12,6 +12,9 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -42,7 +45,6 @@ jobs:
                   m = pat.search(name)
                   if m:
                       ts = m.group(1)
-                      # convert YYYYMMDD to YYMMDD if needed
                       date_part, time_part = ts.split("_")
                       if len(date_part) == 8:
                           date_part = date_part[2:]
@@ -82,10 +84,11 @@ jobs:
                           break
                       i += 1
 
+              # Try to use git mv first; if that fails, do a filesystem move and stage changes later
               try:
-                  subprocess.run(["git","mv","-k",str(f),str(dest)], check=True,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                  subprocess.run(["git","mv", str(f), str(dest)], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
               except Exception:
+                  # fallback: move the file at filesystem level
                   shutil.move(str(f), str(dest))
               moved.append((old_name, dest.name))
               renamed_count += 1
@@ -123,9 +126,12 @@ jobs:
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git add images/
-          git commit -m "Rename images to image_YYMMDD_HHMMSS format" || echo "No changes"
+          # Stage all additions/deletions/renames under the repo
+          git add -A
+          git commit -m "Rename images to image_YYMMDD_HHMMSS format" || echo "No changes to commit"
           git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Summary
         id: summary
