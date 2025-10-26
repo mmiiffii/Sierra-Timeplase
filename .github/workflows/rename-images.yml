@@ -1,7 +1,7 @@
 name: Rename Images in /images (uniform: image_YYMMDD_HHMMSS)
 
 on:
-  workflow_dispatch:  # run manually from GitHub Actions UI
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -9,7 +9,6 @@ permissions:
 jobs:
   rename:
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -20,7 +19,6 @@ jobs:
           python-version: "3.11"
 
       - name: Rename image files
-        id: rename
         run: |
           python3 - <<'PYCODE'
           import re, os, csv, time, subprocess, shutil
@@ -33,81 +31,92 @@ jobs:
           audit_txt = IMAGES / f"rename_audit_{TS}.txt"
           audit_csv = IMAGES / f"rename_audit_{TS}.csv"
 
-          # Pattern to extract timestamp-like strings (YYYYMMDD_HHMMSS or similar)
+          # Accept either YYYYMMDD_HHMMSS or YYMMDD_HHMMSS somewhere in the name
           TS_PATTERNS = [
-              re.compile(r"(\d{8}_\d{6})"),    # 20251025_142015
-              re.compile(r"(\d{6}_\d{6})"),    # 251025_142015
+              re.compile(r"(\d{8}_\d{6})"),  # 20251025_142015
+              re.compile(r"(\d{6}_\d{6})"),  # 251025_142015
           ]
 
-          def extract_timestamp(name):
+          def extract_timestamp(name: str):
               for pat in TS_PATTERNS:
                   m = pat.search(name)
                   if m:
                       ts = m.group(1)
                       # convert YYYYMMDD to YYMMDD if needed
-                      if len(ts.split('_')[0]) == 8:
-                          ts = ts[2:]  # trim to YYMMDD_HHMMSS
-                      return ts
+                      date_part, time_part = ts.split("_")
+                      if len(date_part) == 8:
+                          date_part = date_part[2:]
+                      return f"{date_part}_{time_part}"
               return None
 
           moved = []
           unchanged = []
           renamed_count = 0
 
-          for f in sorted(IMAGES.iterdir()):
-              if not f.is_file() or f.suffix.lower() not in EXTS:
-                  continue
+          # only files directly in /images (not subfolders)
+          if not IMAGES.exists():
+              print("No /images directory found.")
+              open("renamed_count.txt","w").write("0")
+              raise SystemExit(0)
+
+          files = [p for p in IMAGES.iterdir() if p.is_file() and p.suffix.lower() in EXTS]
+
+          for f in sorted(files):
               old_name = f.name
               ts = extract_timestamp(old_name)
               if not ts:
-                  unchanged.append(f)
+                  unchanged.append(old_name)
                   continue
               new_name = f"image_{ts}{f.suffix.lower()}"
               if old_name == new_name:
-                  unchanged.append(f)
+                  unchanged.append(old_name)
                   continue
-              dest = f.parent / new_name
+
+              dest = f.with_name(new_name)
               if dest.exists():
-                  # avoid overwriting; add incremental suffix
                   i = 1
-                  while (f.parent / f"image_{ts}_{i}{f.suffix.lower()}").exists():
+                  while True:
+                      cand = f.with_name(f"image_{ts}_{i}{f.suffix.lower()}")
+                      if not cand.exists():
+                          dest = cand
+                          break
                       i += 1
-                  dest = f.parent / f"image_{ts}_{i}{f.suffix.lower()}"
+
               try:
-                  subprocess.run(["git", "mv", "-k", str(f), str(dest)],
-                                 check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                  subprocess.run(["git","mv","-k",str(f),str(dest)], check=True,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
               except Exception:
                   shutil.move(str(f), str(dest))
               moved.append((old_name, dest.name))
               renamed_count += 1
 
-          # write audit files
+          # write audits
           lines = [
-              f"RENAME AUDIT ({time.strftime('%Y-%m-%d %H:%M:%S UTC')})",
-              f"Files scanned: {len(list(IMAGES.iterdir()))}",
+              f"RENAME AUDIT (UTC {time.strftime('%Y-%m-%d %H:%M:%S')})",
+              f"Images scanned in /images: {len(files)}",
               f"Renamed files: {renamed_count}",
               "",
-              "Renamed files (old -> new):",
+              "Renamed (old -> new):",
           ]
-          for old,new in moved:
-              lines.append(f"{old} -> {new}")
+          lines.extend([f"{o} -> {n}" for o,n in moved] or ["(none)"])
           lines.append("")
           lines.append(f"Unchanged files: {len(unchanged)}")
-          for u in unchanged:
-              lines.append(f"{u.name}")
+          lines.extend(unchanged or ["(none)"])
           audit_txt.write_text("\n".join(lines), encoding="utf-8")
 
-          with open(audit_csv, "w", newline="", encoding="utf-8") as f:
-              w = csv.writer(f)
-              w.writerow(["old_name", "new_name"])
-              for old,new in moved:
-                  w.writerow([old,new])
+          with open(audit_csv, "w", newline="", encoding="utf-8") as fcsv:
+              w = csv.writer(fcsv)
+              w.writerow(["old_name","new_name"])
+              for o,n in moved:
+                  w.writerow([o,n])
 
           print(f"✅ Renamed {renamed_count} files.")
           print(f"📝 Audit TXT: {audit_txt}")
           print(f"🗂️  Audit CSV: {audit_csv}")
 
-          print(f"::set-output name=renamed::{renamed_count}")
+          # pass count to next step
+          with open("renamed_count.txt","w") as f:
+              f.write(str(renamed_count))
           PYCODE
 
       - name: Commit and push changes
@@ -119,8 +128,10 @@ jobs:
           git push
 
       - name: Summary
+        id: summary
         run: |
+          echo "renamed=$(cat renamed_count.txt)" >> $GITHUB_OUTPUT
           echo "## Rename Images Audit" >> $GITHUB_STEP_SUMMARY
-          echo "- Files renamed: ${{ steps.rename.outputs.renamed }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Files renamed: $(cat renamed_count.txt)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Audit files written to:** images/rename_audit_*.txt and images/rename_audit_*.csv" >> $GITHUB_STEP_SUMMARY
