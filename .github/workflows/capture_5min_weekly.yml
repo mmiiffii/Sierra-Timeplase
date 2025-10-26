@@ -1,0 +1,51 @@
+name: Capture Webcam Image → Weekly Folders (every 5 min)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 minutes, UTC
+  workflow_dispatch:         # allow manual run
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: capture-5min-weekly
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install deps
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Download image into weekly folder
+        env:
+          TIMEZONE: "Europe/Madrid"   # change if needed
+          MIRROR_TO_5MIN: "false"     # set "true" to also save a copy in /images/5min
+        run: |
+          python scripts/download_image_5min_weekly.py
+
+      - name: Commit and push
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add images/
+          git commit -m "Add 5-min snapshot (weekly folder)" || echo "No changes"
+          git push
