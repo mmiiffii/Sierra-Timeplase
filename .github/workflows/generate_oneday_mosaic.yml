@@ -1,0 +1,91 @@
+name: Generate Timelapse — One Composite Day (Release)
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: "Local start time (HH:MM), e.g. 05:00"
+        required: false
+        default: "05:00"
+      step_mins:
+        description: "Grid spacing in minutes"
+        required: false
+        default: "5"
+      tolerance_seconds:
+        description: "Max deviation from slot in seconds (default step/2)"
+        required: false
+        default: ""
+      fps:
+        description: "Frames per second"
+        required: false
+        default: "24"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: generate-oneday-mosaic
+  cancel-in-progress: true
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Ensure output dir
+        run: mkdir -p timelapses
+
+      - name: Build composite-day timelapse
+        id: build
+        env:
+          TIMEZONE: "Europe/Madrid"
+        run: |
+          START="${{ github.event.inputs.start }}"
+          STEP="${{ github.event.inputs.step_mins }}"
+          TOL="${{ github.event.inputs.tolerance_seconds }}"
+          FPS_IN="${{ github.event.inputs.fps }}"
+          [[ -z "$START" ]] && START="05:00"
+          [[ -z "$STEP" ]] && STEP="5"
+          [[ -z "$FPS_IN" ]] && FPS_IN="24"
+          EXTRA_TOL=""
+          if [[ -n "$TOL" ]]; then
+            EXTRA_TOL="--tolerance-seconds $TOL"
+          fi
+          python scripts/generate_timelapse_oneday_mosaic.py \
+            --start "$START" --step-mins "$STEP" $EXTRA_TOL --fps "$FPS_IN" | tee build.log
+          echo "frames_used=$(grep -m1 '^Used frames:' build.log | awk '{print $3}')" >> $GITHUB_OUTPUT
+
+      - name: Create tag
+        id: tag
+        run: echo "tag=timelapse-oneday-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+      - name: Publish to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "Timelapse (One Composite Day) — ${{ steps.tag.outputs.tag }}"
+          files: timelapses/timelapse_oneday_*.mp4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Composite-Day Timelapse" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Start: ${{ github.event.inputs.start || '05:00' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Step (mins): ${{ github.event.inputs.step_mins || '5' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tolerance (sec): ${{ github.event.inputs.tolerance_seconds || 'step/2' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- FPS: ${{ github.event.inputs.fps || '24' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Output: attached to the Release" >> "$GITHUB_STEP_SUMMARY"
