@@ -38,7 +38,7 @@ jobs:
           from io import BytesIO
 
           IMAGE_URL = "https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg"
-          SAVE_DIR = "images_5min"
+          SAVE_DIR = "images__pradollano_5min"
           os.makedirs(SAVE_DIR, exist_ok=True)
 
           def get_exif_timestamp(image_bytes):
@@ -56,7 +56,7 @@ jobs:
               exif_time = get_exif_timestamp(r.content)
               now = datetime.datetime.utcnow()
               ts = exif_time or now
-              fname = ts.strftime("image_%Y%m%d_%H%M%S.jpg")
+              fname = ts.strftime("image_prado_%Y%m%d_%H%M%S.jpg")
               path = os.path.join(SAVE_DIR, fname)
               with open(path, "wb") as f:
                   f.write(r.content)
