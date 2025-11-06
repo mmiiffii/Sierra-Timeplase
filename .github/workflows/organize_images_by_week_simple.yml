@@ -6,25 +6,52 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: weekly-organizer
+  cancel-in-progress: true
+
 jobs:
   organize:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout (full history for rebase)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install pytz
-        run: pip install pytz
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytz
 
       - name: Run organizer
         run: python scripts/organize_images_by_week_simple.py
 
-      - name: Commit and push changes
+      - name: Pull latest main, commit, and push
         run: |
+          set -e
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git add images/ images_5min/ images_pradollano/ || true
-          git commit -m "Organize all images into weekly folders" || echo "No changes"
-          git push
+
+          # Ensure we’re on main and up-to-date
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main || true
+
+          # Stage & commit changes
+          git add -A
+          git commit -m "Organize all images into weekly folders" || echo "No changes to commit"
+
+          # Push (re-run if another job raced us)
+          git push origin HEAD:main || (
+            echo "Retrying after rebase…"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          )
