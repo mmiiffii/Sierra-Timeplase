@@ -1,0 +1,30 @@
+name: Organize Images by Week (Simple)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  organize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytz
+        run: pip install pytz
+
+      - name: Run organizer
+        run: python scripts/organize_images_by_week_simple.py
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add images/ images_5min/ images_pradollano/ || true
+          git commit -m "Organize all images into weekly folders" || echo "No changes"
+          git push
