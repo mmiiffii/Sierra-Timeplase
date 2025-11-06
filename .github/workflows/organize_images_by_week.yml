@@ -1,0 +1,206 @@
+name: Organize ALL Images Into Weekly Folders
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  organize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Organize all images by ISO week (Mon start, Europe/Madrid)
+        run: |
+          python3 - <<'PYCODE'
+          import os, re, csv, time, shutil, subprocess
+          from pathlib import Path
+          from datetime import datetime, timedelta
+
+          # --- Config ---
+          TIMEZONE = "Europe/Madrid"
+          # Where to write weekly folders + audits
+          IMAGES_ROOT = Path("images")
+          IMAGES_ROOT.mkdir(parents=True, exist_ok=True)
+
+          # Source roots to scan (add/remove as needed)
+          SOURCE_DIRS = [
+            Path("images"),                # includes weekly subfolders & any loose images
+            Path("images_pradollano"),
+            Path("images_Borrguiles_5min"),
+            Path("images_5min"),           # legacy
+          ]
+
+          EXTS = {".jpg",".jpeg",".png",".gif",".webp",".tif",".tiff",".bmp"}
+          # Accept a few timestamp shapes inside filenames
+          PAT_8 = re.compile(r"(\d{8}_\d{6})")  # 20250131_142015
+          PAT_6 = re.compile(r"(\d{6}_\d{6})")  # 250131_142015
+          PAT_ANY = [PAT_8, PAT_6]
+
+          def extract_tsYY(name: str):
+            # Return YYMMDD_HHMMSS or None
+            for pat in PAT_ANY:
+              m = pat.search(name)
+              if m:
+                s = m.group(1)
+                if len(s) == 15:  # YYYYMMDD_HHMMSS
+                  date8, time6 = s.split("_")
+                  return f"{date8[2:4]}{date8[4:6]}{date8[6:8]}_{time6}"
+                return s  # already YYMMDD_HHMMSS
+            return None
+
+          def tsYY_to_utc(tsYY: str) -> datetime:
+            # filenames assumed UTC; map to 20YY
+            YY,MM,DD = tsYY[:2], tsYY[2:4], tsYY[4:6]
+            hh,mm,ss = tsYY[7:9], tsYY[9:11], tsYY[11:13]
+            year = 2000 + int(YY)
+            return datetime(year, int(MM), int(DD), int(hh), int(mm), int(ss))
+
+          def to_local(utc_dt: datetime):
+            import pytz
+            tz = pytz.timezone(TIMEZONE)
+            return pytz.utc.localize(utc_dt).astimezone(tz)
+
+          def week_label(local_dt: datetime) -> str:
+            # Monday start ISO week; label range Mon..Sun
+            iso_year, iso_week, iso_weekday = local_dt.isocalendar()
+            monday = local_dt - timedelta(days=iso_weekday-1)
+            monday = datetime(monday.year, monday.month, monday.day)
+            sunday = monday + timedelta(days=6)
+            def d_label(d): return f"{d.day:02d}{d.strftime('%b')}"
+            if monday.month == sunday.month:
+              range_label = f"{monday.day:02d}-{sunday.day:02d}{monday.strftime('%b')}"
+            else:
+              range_label = f"{d_label(monday)}-{d_label(sunday)}"
+            return f"Week {iso_week:02d} - {range_label}"
+
+          def is_week_folder(path: Path) -> bool:
+            # Quick check: folder under /images starting with "Week "
+            try:
+              rel = path.relative_to(IMAGES_ROOT)
+            except ValueError:
+              return False
+            parts = rel.parts
+            return len(parts)>=1 and parts[0].startswith("Week ")
+
+          def git_mv(src: Path, dst: Path) -> bool:
+            try:
+              subprocess.run(["git","mv","-k",str(src),str(dst)], check=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+              return True
+            except Exception:
+              return False
+
+          def move_file(src: Path, dst: Path):
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not git_mv(src, dst):
+              shutil.move(str(src), str(dst))
+
+          # Collect all candidate files (images) from all source dirs
+          all_files = []
+          for root in SOURCE_DIRS:
+            if not root.exists(): continue
+            for p in root.rglob("*"):
+              if not p.is_file(): continue
+              if p.suffix.lower() not in EXTS: continue
+              # Skip .git and timelapse outputs
+              if ".git" in p.parts or "timelapses" in p.parts: continue
+              all_files.append(p)
+
+          # De-dup by absolute path
+          uniq = {}
+          for p in all_files:
+            uniq[str(p.resolve())] = p
+          files = sorted(uniq.values())
+
+          moved, unchanged, skipped = [], [], []
+
+          for p in files:
+            tsYY = extract_tsYY(p.name)
+            if not tsYY:
+              skipped.append((str(p), "no timestamp in name"))
+              continue
+            utc_dt = tsYY_to_utc(tsYY)
+            local_dt = to_local(utc_dt)
+            wk = week_label(local_dt)
+            dest_dir = IMAGES_ROOT / wk
+            dest = dest_dir / p.name
+
+            # If already in a "Week" folder and it's the correct one, skip
+            if is_week_folder(p):
+              try:
+                rel = p.relative_to(IMAGES_ROOT)
+                current_week = rel.parts[0]
+              except ValueError:
+                current_week = None
+              if current_week == wk:
+                unchanged.append(str(p))
+                continue
+
+            # Collision-safe
+            if dest.exists():
+              base, ext = p.stem, p.suffix.lower()
+              i = 1
+              while (dest_dir / f"{base}_{i}{ext}").exists():
+                i += 1
+              dest = dest_dir / f"{base}_{i}{ext}"
+
+            move_file(p, dest)
+            moved.append((str(p), str(dest)))
+
+          # Write audits
+          TS = time.strftime("%Y%m%d_%H%M%S")
+          audit_txt = IMAGES_ROOT / f"organize_weeks_audit_{TS}.txt"
+          audit_csv = IMAGES_ROOT / f"organize_weeks_audit_{TS}.csv"
+
+          lines = []
+          lines.append("ORGANIZE BY WEEK AUDIT")
+          lines.append(f"UTC: {TS}\n")
+          lines.append(f"Total scanned image files: {len(files)}")
+          lines.append(f"Moved: {len(moved)}")
+          lines.append(f"Unchanged (already correct): {len(unchanged)}")
+          lines.append(f"Skipped (no timestamp): {len(skipped)}\n")
+          lines.append("== Moved ==")
+          for s,d in moved[:1000]:
+            lines.append(f"{s} -> {d}")
+          lines.append("\n== Unchanged ==")
+          for u in unchanged[:1000]:
+            lines.append(u)
+          lines.append("\n== Skipped (no timestamp) ==")
+          for s,why in skipped[:1000]:
+            lines.append(f"{s}  ({why})")
+          audit_txt.write_text("\n".join(lines), encoding="utf-8")
+
+          with open(audit_csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["status","source","destination_or_reason"])
+            for s,d in moved:     w.writerow(["moved", s, d])
+            for u in unchanged:   w.writerow(["unchanged", u, ""])
+            for s,why in skipped: w.writerow(["skipped", s, why])
+
+          print(f"📝 Audit TXT: {audit_txt}")
+          print(f"🗂️  Audit CSV: {audit_csv}")
+          PYCODE
+
+      - name: Commit and push changes
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add images/
+          git add images_pradollano/ images_Borrguiles_5min/ images_5min/ || true
+          git commit -m "Organize all images into weekly folders" || echo "No changes"
+          git push
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Organize Images by Week" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Wrote audit files: images/organize_weeks_audit_*.txt / .csv" >> "$GITHUB_STEP_SUMMARY"
