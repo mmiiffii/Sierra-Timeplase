@@ -1,7 +1,7 @@
-name: Organize Pradollano & Borreguiles Into Weekly Folders
+name: Organize Images by Week (per camera)
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -10,201 +10,24 @@ jobs:
   organize:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
+          pip install --upgrade pip
           pip install pytz
 
-      - name: Organize by camera + ISO week (Mon start, Europe/Madrid)
-        run: |
-          python3 - <<'PYCODE'
-          import os, re, csv, time, shutil, subprocess
-          from pathlib import Path
-          from datetime import datetime, timedelta
-          import pytz
+      - name: Organize images by week (separate cameras)
+        run: python scripts/organize_images_per_camera_weekly.py
 
-          # --- Config ---
-          TIMEZONE = "Europe/Madrid"
-          TZ = pytz.timezone(TIMEZONE)
-
-          # Destination roots (per camera) under /images
-          DEST_ROOT = Path("images")
-          DEST_PRADO = DEST_ROOT / "pradollano"
-          DEST_BORRE = DEST_ROOT / "borreguiles"
-          for d in (DEST_PRADO, DEST_BORRE):
-              d.mkdir(parents=True, exist_ok=True)
-
-          # Sources we’ll scan
-          SOURCE_DIRS = [
-            Path("images_pradollano"),        # new prado raw
-            Path("images_Borrguiles_5min"),   # new borre raw
-            Path("images_5min"),              # legacy prado raw
-            Path("images"),                    # anything already under images/*
-          ]
-
-          EXTS = {".jpg",".jpeg",".png",".gif",".webp",".tif",".tiff",".bmp"}
-          PAT_8 = re.compile(r"(\d{8}_\d{6})")  # 20250131_142015
-          PAT_6 = re.compile(r"(\d{6}_\d{6})")  # 250131_142015
-
-          def extract_tsYY(name: str):
-              m = PAT_8.search(name)
-              if m:
-                  d,t = m.group(1).split("_")
-                  return f"{d[2:4]}{d[4:6]}{d[6:8]}_{t}"
-              m = PAT_6.search(name)
-              if m:
-                  return m.group(1)
-              return None
-
-          def tsYY_to_utc(tsYY: str) -> datetime:
-              YY,MM,DD = tsYY[:2], tsYY[2:4], tsYY[4:6]
-              hh,mm,ss = tsYY[7:9], tsYY[9:11], tsYY[11:13]
-              year = 2000 + int(YY)
-              return datetime(year, int(MM), int(DD), int(hh), int(mm), int(ss))
-
-          def to_local(utc_dt: datetime) -> datetime:
-              return pytz.utc.localize(utc_dt).astimezone(TZ)
-
-          def week_label(local_dt: datetime) -> str:
-              iso_year, iso_week, iso_weekday = local_dt.isocalendar()  # Mon=1
-              monday = local_dt - timedelta(days=iso_weekday-1)
-              monday = datetime(monday.year, monday.month, monday.day, tzinfo=local_dt.tzinfo)
-              sunday = monday + timedelta(days=6)
-              def d_label(d): return f"{d.day:02d}{d.strftime('%b')}"
-              if monday.month == sunday.month:
-                  rng = f"{monday.day:02d}-{sunday.day:02d}{monday.strftime('%b')}"
-              else:
-                  rng = f"{d_label(monday)}-{d_label(sunday)}"
-              return f"Week {iso_week:02d} - {rng}"
-
-          def which_camera(p: Path) -> str | None:
-              name = p.name.lower()
-              # folder-based hints
-              parts = [x.lower() for x in p.parts]
-              if "images_pradollano".lower() in parts or "images_5min".lower() in parts:
-                  return "prado"
-              if "images_borrguiles_5min".lower() in parts:
-                  return "borre"
-              # prefix-based hints
-              if name.startswith("image_prado_"):
-                  return "prado"
-              if name.startswith("image_borre_"):
-                  return "borre"
-              return None  # unknown: leave alone
-
-          def dest_root_for_camera(cam: str) -> Path:
-              return DEST_PRADO if cam == "prado" else DEST_BORRE
-
-          def is_already_correct_week(p: Path, expected_week: str, cam: str) -> bool:
-              try:
-                  rel = p.relative_to(dest_root_for_camera(cam))
-              except ValueError:
-                  return False
-              parts = rel.parts
-              return len(parts) >= 2 and parts[0] == expected_week
-
-          def git_mv(src: Path, dst: Path) -> bool:
-              try:
-                  subprocess.run(["git","mv","-k",str(src),str(dst)], check=True,
-                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                  return True
-              except Exception:
-                  return False
-
-          def move_file(src: Path, dst: Path):
-              dst.parent.mkdir(parents=True, exist_ok=True)
-              if not git_mv(src, dst):
-                  shutil.move(str(src), str(dst))
-
-          # Gather all image files
-          candidates = []
-          for root in SOURCE_DIRS:
-              if not root.exists(): continue
-              for p in root.rglob("*"):
-                  if not p.is_file(): continue
-                  if p.suffix.lower() not in EXTS: continue
-                  if ".git" in p.parts or "timelapses" in p.parts: continue
-                  candidates.append(p)
-
-          # Deduplicate by real path
-          uniq = {str(p.resolve()): p for p in candidates}
-          files = sorted(uniq.values())
-
-          moved, unchanged, skipped = [], [], []
-
-          for p in files:
-              cam = which_camera(p)
-              if cam not in ("prado","borre"):
-                  skipped.append((str(p), "unknown camera")); continue
-              tsYY = extract_tsYY(p.name)
-              if not tsYY:
-                  skipped.append((str(p), "no timestamp")); continue
-              utc_dt = tsYY_to_utc(tsYY)
-              local_dt = to_local(utc_dt)
-              wk = week_label(local_dt)
-
-              # Destination path
-              dest_dir = dest_root_for_camera(cam) / wk
-              dest = dest_dir / p.name
-
-              # Already correct?
-              if is_already_correct_week(p, wk, cam):
-                  unchanged.append(str(p)); continue
-
-              # Collision-safe
-              if dest.exists():
-                  base, ext = p.stem, p.suffix.lower()
-                  i = 1
-                  while (dest_dir / f"{base}_{i}{ext}").exists():
-                      i += 1
-                  dest = dest_dir / f"{base}_{i}{ext}"
-
-              move_file(p, dest)
-              moved.append((str(p), str(dest)))
-
-          # Audits
-          TS = time.strftime("%Y%m%d_%H%M%S")
-          audit_txt = DEST_ROOT / f"organize_weeks_per_camera_audit_{TS}.txt"
-          audit_csv = DEST_ROOT / f"organize_weeks_per_camera_audit_{TS}.csv"
-
-          lines = []
-          lines.append("ORGANIZE BY WEEK (PER CAMERA) AUDIT")
-          lines.append(f"UTC: {TS}\n")
-          lines.append(f"Total scanned: {len(files)}")
-          lines.append(f"Moved: {len(moved)}")
-          lines.append(f"Unchanged: {len(unchanged)}")
-          lines.append(f"Skipped: {len(skipped)}\n")
-          lines.append("== Moved ==")
-          for s,d in moved[:1000]: lines.append(f"{s} -> {d}")
-          lines.append("\n== Unchanged ==")
-          for u in unchanged[:1000]: lines.append(u)
-          lines.append("\n== Skipped ==")
-          for s,why in skipped[:1000]: lines.append(f"{s}  ({why})")
-          audit_txt.write_text("\n".join(lines), encoding="utf-8")
-
-          with open(audit_csv, "w", newline="", encoding="utf-8") as f:
-              w = csv.writer(f)
-              w.writerow(["status","source","destination_or_reason"])
-              for s,d in moved:     w.writerow(["moved", s, d])
-              for u in unchanged:   w.writerow(["unchanged", u, ""])
-              for s,why in skipped: w.writerow(["skipped", s, why])
-
-          print(f"📝 Audit TXT: {audit_txt}")
-          print(f"🗂️  Audit CSV: {audit_csv}")
-          PYCODE
-
-      - name: Commit and push changes
+      - name: Commit and push
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add images/ images_pradollano/ images_Borrguiles_5min/ images_5min/ || true
-          git commit -m "Organize Pradollano & Borreguiles into weekly folders" || echo "No changes"
+          git commit -m "Organize weekly by camera" || echo "No changes"
           git push
