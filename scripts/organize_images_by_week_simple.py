@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-Organize Pradollano & Borreguiles images into weekly folders.
-- Keeps them separate: /images/pradollano/... and /images/borreguiles/...
-- Each uses Monday-start ISO week, Europe/Madrid local time.
-- Safe to re-run any time.
+Simplified weekly image organizer.
+Moves all image_*.jpg style files into /images/Week XX - DD-DDmmm folders.
+Uses Monday-start ISO weeks in Europe/Madrid local time.
 """
-import os, re, csv, time, shutil, subprocess
+import os, re, time, shutil, subprocess
 from pathlib import Path
 from datetime import datetime, timedelta
 import pytz
@@ -13,22 +12,16 @@ import pytz
 TIMEZONE = "Europe/Madrid"
 TZ = pytz.timezone(TIMEZONE)
 
-DEST_ROOT = Path("images")
-DEST_PRADO = DEST_ROOT / "pradollano"
-DEST_BORRE = DEST_ROOT / "borreguiles"
-for d in (DEST_PRADO, DEST_BORRE):
-    d.mkdir(parents=True, exist_ok=True)
-
+IMAGES_ROOT = Path("images")
 SOURCE_DIRS = [
-    Path("images_pradollano"),
-    Path("images_Borrguiles_5min"),
-    Path("images_5min"),
     Path("images"),
+    Path("images_5min"),
+    Path("images_pradollano"),
 ]
 
-EXTS = {".jpg",".jpeg",".png",".gif",".webp",".tif",".tiff",".bmp"}
-PAT_8 = re.compile(r"(\d{8}_\d{6})")
-PAT_6 = re.compile(r"(\d{6}_\d{6})")
+EXTS = {".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"}
+PAT_8 = re.compile(r"(\d{8}_\d{6})")  # 20251025_142015
+PAT_6 = re.compile(r"(\d{6}_\d{6})")  # 251025_142015
 
 def extract_tsYY(name: str):
     m = PAT_8.search(name)
@@ -50,7 +43,7 @@ def to_local(utc_dt: datetime) -> datetime:
     return pytz.utc.localize(utc_dt).astimezone(TZ)
 
 def week_label(local_dt: datetime) -> str:
-    iso_year, iso_week, iso_weekday = local_dt.isocalendar()
+    iso_year, iso_week, iso_weekday = local_dt.isocalendar()  # Monday=1
     monday = local_dt - timedelta(days=iso_weekday-1)
     monday = datetime(monday.year, monday.month, monday.day, tzinfo=local_dt.tzinfo)
     sunday = monday + timedelta(days=6)
@@ -60,18 +53,6 @@ def week_label(local_dt: datetime) -> str:
     else:
         rng = f"{d_label(monday)}-{d_label(sunday)}"
     return f"Week {iso_week:02d} - {rng}"
-
-def which_camera(p: Path) -> str | None:
-    parts = [x.lower() for x in p.parts]
-    name = p.name.lower()
-    if "images_pradollano" in parts or "images_5min" in parts or name.startswith("image_prado_"):
-        return "prado"
-    if "images_borrguiles_5min" in parts or name.startswith("image_borre_"):
-        return "borre"
-    return None
-
-def dest_root_for_camera(cam: str) -> Path:
-    return DEST_PRADO if cam == "prado" else DEST_BORRE
 
 def git_mv(src: Path, dst: Path) -> bool:
     try:
@@ -92,10 +73,9 @@ def organize():
         if not root.exists():
             continue
         for p in root.rglob("*"):
-            if not p.is_file() or p.suffix.lower() not in EXTS:
-                continue
-            if ".git" in p.parts or "timelapses" in p.parts:
-                continue
+            if not p.is_file(): continue
+            if p.suffix.lower() not in EXTS: continue
+            if ".git" in p.parts or "timelapses" in p.parts: continue
             all_files.append(p)
 
     uniq = {str(p.resolve()): p for p in all_files}
@@ -104,10 +84,6 @@ def organize():
     moved, unchanged, skipped = [], [], []
 
     for p in files:
-        cam = which_camera(p)
-        if cam not in ("prado","borre"):
-            skipped.append((str(p), "unknown camera"))
-            continue
         tsYY = extract_tsYY(p.name)
         if not tsYY:
             skipped.append((str(p), "no timestamp"))
@@ -115,9 +91,18 @@ def organize():
         utc_dt = tsYY_to_utc(tsYY)
         local_dt = to_local(utc_dt)
         wk = week_label(local_dt)
-
-        dest_dir = dest_root_for_camera(cam) / wk
+        dest_dir = IMAGES_ROOT / wk
         dest = dest_dir / p.name
+
+        # Skip if already correct
+        try:
+            rel = p.relative_to(IMAGES_ROOT)
+            if rel.parts and rel.parts[0] == wk:
+                unchanged.append(str(p))
+                continue
+        except ValueError:
+            pass
+
         if dest.exists():
             base, ext = p.stem, p.suffix.lower()
             i = 1
@@ -125,32 +110,18 @@ def organize():
                 i += 1
             dest = dest_dir / f"{base}_{i}{ext}"
 
-        # Skip if already correct
-        try:
-            rel = p.relative_to(dest_root_for_camera(cam))
-            if rel.parts and rel.parts[0] == wk:
-                unchanged.append(str(p))
-                continue
-        except ValueError:
-            pass
-
         move_file(p, dest)
         moved.append((str(p), str(dest)))
 
-    # Audit
     TS = time.strftime("%Y%m%d_%H%M%S")
-    audit_txt = DEST_ROOT / f"organize_weeks_per_camera_audit_{TS}.txt"
-    with open(audit_txt, "w", encoding="utf-8") as f:
-        f.write("Organize by week per camera audit\n")
-        f.write(f"UTC run: {TS}\n\n")
-        f.write(f"Moved: {len(moved)}\nUnchanged: {len(unchanged)}\nSkipped: {len(skipped)}\n\n")
-        for s,d in moved:
-            f.write(f"MOVED: {s} -> {d}\n")
-        for s in unchanged:
-            f.write(f"UNCHANGED: {s}\n")
-        for s,why in skipped:
-            f.write(f"SKIPPED: {s} ({why})\n")
-    print(f"✅ Audit written to {audit_txt}")
+    audit = IMAGES_ROOT / f"organize_simple_audit_{TS}.txt"
+    with open(audit, "w", encoding="utf-8") as f:
+        f.write(f"Run: {TS}\n\nMoved: {len(moved)}\nUnchanged: {len(unchanged)}\nSkipped: {len(skipped)}\n\n")
+        for s,d in moved: f.write(f"MOVED {s} -> {d}\n")
+        for u in unchanged: f.write(f"UNCHANGED {u}\n")
+        for s,why in skipped: f.write(f"SKIPPED {s} ({why})\n")
+    print(f"✅ Audit written: {audit}")
+    print(f"Moved {len(moved)}, unchanged {len(unchanged)}, skipped {len(skipped)}")
 
 if __name__ == "__main__":
     organize()
