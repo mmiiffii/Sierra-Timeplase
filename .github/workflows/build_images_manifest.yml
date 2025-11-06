@@ -1,0 +1,110 @@
+name: Build Images Manifest (for Pages)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "images/**"        # rebuild when images change
+      - ".github/workflows/build_images_manifest.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-images-manifest
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history for rebase)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Build manifest.json from /images
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+          REPO_NAME:  ${{ github.event.repository.name }}
+          BRANCH:     main
+        run: |
+          python - <<'PY'
+          import json, re, os
+          from pathlib import Path
+
+          ROOT = Path(".")
+          IMAGES = ROOT/"images"
+          DOCS = ROOT/"docs"
+          DOCS.mkdir(parents=True, exist_ok=True)
+
+          # Accept timestamps in filenames: YYMMDD_HHMMSS or YYYYMMDD_HHMMSS
+          pat8 = re.compile(r"(\d{8}_\d{6})")
+          pat6 = re.compile(r"(\d{6}_\d{6})")
+
+          def ts_key(name: str):
+            # normalize to YYYYMMDD_HHMMSS for sorting
+            m = pat8.search(name)
+            if m:
+              return m.group(1)
+            m = pat6.search(name)
+            if m:
+              yy = m.group(1)[:2]
+              rest = m.group(1)[2:]
+              return f"20{yy}{rest}"  # crude but preserves order within 2000-2099
+            # fallback to filename
+            return name
+
+          # Find week folders
+          weeks = []
+          if IMAGES.exists():
+            for p in sorted(IMAGES.iterdir()):
+              if p.is_dir() and p.name.startswith("Week "):
+                weeks.append(p)
+
+          data = {"weeks": []}
+          for week_dir in weeks:
+            items = []
+            for f in sorted(week_dir.iterdir(), key=lambda x: ts_key(x.name)):
+              if not f.is_file():
+                continue
+              if f.suffix.lower() not in {".jpg",".jpeg",".png",".webp",".bmp",".tif",".tiff",".gif"}:
+                continue
+              rel_path = f.as_posix()  # repo-relative
+              raw_url = f"https://raw.githubusercontent.com/{os.environ['REPO_OWNER']}/{os.environ['REPO_NAME']}/{os.environ['BRANCH']}/{rel_path}"
+              items.append({
+                "name": f.name,
+                "path": rel_path,
+                "raw": raw_url
+              })
+            data["weeks"].append({
+              "label": week_dir.name,
+              "path": week_dir.as_posix(),
+              "count": len(items),
+              "images": items
+            })
+
+          (DOCS/"manifest.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
+          print(f"Wrote docs/manifest.json with {len(data['weeks'])} weeks.")
+          PY
+
+      - name: Commit & push manifest (with rebase)
+        run: |
+          set -e
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add docs/manifest.json
+          git commit -m "Update docs/manifest.json" || echo "No changes"
+          git fetch origin main
+          git pull --rebase origin main || true
+          git push origin HEAD:main || (
+            echo "Retry after rebase…"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          )
