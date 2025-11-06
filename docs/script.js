@@ -10,19 +10,21 @@ const tlBtn = document.getElementById("timelapseBtn");
 const loading = document.getElementById("loading");
 const themeToggle = document.getElementById("themeToggle");
 const speedSelect = document.getElementById("speedSelect");
-const playhint = document.getElementById("playhint");
+const playToggle = document.getElementById("playToggle");
+const fabPlay = document.getElementById("fabPlay");
+const sheetBackdrop = document.getElementById("sheetBackdrop");
 
 // State
 let manifest = null;
-let weekIndex = 0;      // we will order ASC now
+let weekIndex = 0;      // ASC order: oldest -> newest
 let images = [];
 let pendingIndex = null;
 let prefetchRadius = 4;
 let playing = false;
-let playTimer = null;   // setInterval handle
+let playTimer = null;
 let ipsBase = 6;        // images per second at 1×
 
-// THEME
+/* ---------------- THEME ---------------- */
 (function initTheme(){
   const saved = localStorage.getItem("sierra-theme");
   if (saved === "light" || saved === "dark") {
@@ -38,13 +40,11 @@ themeToggle.addEventListener("click", () => {
   themeToggle.textContent = next === "dark" ? "☾" : "☼";
 });
 
-// UTILS
+/* ---------------- UTILS ---------------- */
 function showLoading(on) { loading.style.display = on ? "block" : "none"; }
 function setSliderMax(n) { slider.max = String(Math.max(1, n)); slider.value = "1"; }
-function orderWeeksAsc(data) {
-  // Ascending by label (oldest → newest)
-  data.weeks.sort((a,b) => a.label > b.label ? 1 : -1);
-}
+function orderWeeksAsc(data) { data.weeks.sort((a,b) => a.label > b.label ? 1 : -1); }
+
 function buildWeekMenu() {
   weekMenu.innerHTML = "";
   manifest.weeks.forEach((wk, i) => {
@@ -53,21 +53,41 @@ function buildWeekMenu() {
     btn.textContent = wk.label;
     btn.addEventListener("click", () => {
       weekIndex = i;
-      weekMenu.classList.remove("open");
+      closeWeekMenu();
       stopPlayback();
       loadWeek(weekIndex);
     });
     weekMenu.appendChild(btn);
   });
 }
-weekBtn.addEventListener("click", () => weekMenu.classList.toggle("open"));
+
+function openWeekMenu() {
+  weekBtn.setAttribute("aria-expanded", "true");
+  weekMenu.classList.add("open");
+  // On mobile, show backdrop
+  if (window.matchMedia("(max-width: 719px)").matches) {
+    sheetBackdrop.classList.add("open");
+  }
+}
+function closeWeekMenu() {
+  weekBtn.setAttribute("aria-expanded", "false");
+  weekMenu.classList.remove("open");
+  sheetBackdrop.classList.remove("open");
+}
+
+weekBtn.addEventListener("click", (e) => {
+  const isOpen = weekMenu.classList.contains("open");
+  isOpen ? closeWeekMenu() : openWeekMenu();
+  e.stopPropagation();
+});
 document.addEventListener("click", (e) => {
   if (!weekMenu.contains(e.target) && e.target !== weekBtn) {
-    weekMenu.classList.remove("open");
+    closeWeekMenu();
   }
 });
+sheetBackdrop.addEventListener("click", closeWeekMenu);
 
-// PREFETCH
+/* ---------------- PREFETCH ---------------- */
 const cache = new Map(); // url->Image object (loaded)
 function prefetchAround(idx) {
   if (!images.length) return;
@@ -83,7 +103,7 @@ function prefetchAround(idx) {
   }
 }
 
-// RENDER
+/* ---------------- RENDER ---------------- */
 let rafId = 0;
 function requestShow(index) {
   pendingIndex = index;
@@ -113,7 +133,7 @@ function applyShow() {
   prefetchAround(idx);
 }
 
-// LOAD
+/* ---------------- LOAD ---------------- */
 async function loadManifest() {
   const res = await fetch(manifestURL, { cache: "no-cache" });
   if (!res.ok) throw new Error("Failed to load manifest.json");
@@ -136,65 +156,44 @@ function loadWeek(i) {
   }
 }
 
-// SLIDER
+/* ---------------- SLIDER ---------------- */
 slider.addEventListener("input", () => {
-  stopPlaybackPendingHint();
+  stopPlaybackBriefHint();
   requestShow(Number(slider.value) - 1);
 });
 
-// KEYBOARD
-function togglePlayback() {
-  playing ? stopPlayback() : startPlayback();
-}
-window.addEventListener("keydown", (e) => {
-  if (e.code === "Space") {
-    e.preventDefault();
-    togglePlayback();
-    return;
-  }
-  if (!images.length) return;
-  if (e.key === "ArrowLeft") {
-    stopPlaybackPendingHint();
-    slider.value = String(Math.max(1, Number(slider.value) - 1));
-    requestShow(Number(slider.value) - 1);
-  }
-  if (e.key === "ArrowRight") {
-    stopPlaybackPendingHint();
-    slider.value = String(Math.min(Number(slider.max), Number(slider.value) + 1));
-    requestShow(Number(slider.value) - 1);
-  }
-});
-
-// PLAYBACK
+/* ---------------- PLAYBACK ---------------- */
 function currentRateIPS() {
-  // images per second based on multiplier × base
   const mult = parseFloat(speedSelect.value || "1");
   return Math.max(0.1, ipsBase * mult);
 }
 function startPlayback() {
   if (playing || !images.length) return;
   playing = true;
-  playhint.style.display = "none";
+  playToggle.textContent = "❚❚";
+  playToggle.setAttribute("aria-pressed", "true");
+  fabPlay.textContent = "❚❚";
   const stepMs = Math.max(5, 1000 / currentRateIPS());
   playTimer = setInterval(tickForward, stepMs);
 }
 function stopPlayback() {
   playing = false;
   if (playTimer) { clearInterval(playTimer); playTimer = null; }
+  playToggle.textContent = "▶";
+  playToggle.setAttribute("aria-pressed", "false");
+  fabPlay.textContent = "▶";
 }
 let hintTimer = null;
-function stopPlaybackPendingHint() {
+function stopPlaybackBriefHint() {
   stopPlayback();
-  playhint.style.display = "block";
-  clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => (playhint.style.display = "none"), 1500);
+  // No explicit hint element now; button state is clear.
 }
 function tickForward() {
   if (!images.length) return;
   let idx = Number(slider.value) - 1;
   idx += 1;
   if (idx >= images.length) {
-    // go to next week (ASC order); wrap to first week at end
+    // advance to next week (wrap after newest)
     weekIndex = (weekIndex + 1) % manifest.weeks.length;
     loadWeek(weekIndex);
     idx = 0;
@@ -203,26 +202,44 @@ function tickForward() {
   requestShow(idx);
 }
 speedSelect.addEventListener("change", () => {
-  if (playing) {
-    // restart timer with new speed
-    stopPlayback();
-    startPlayback();
+  if (playing) { stopPlayback(); startPlayback(); }
+});
+function togglePlayback() { playing ? stopPlayback() : startPlayback(); }
+playToggle.addEventListener("click", togglePlayback);
+fabPlay.addEventListener("click", togglePlayback);
+
+// Tap image to toggle chrome on mobile (optional: keep simple -> toggle playback)
+imgEl.addEventListener("click", () => {
+  if (window.matchMedia("(max-width: 719px)").matches) togglePlayback();
+});
+
+/* ---------------- KEYBOARD (desktop) ---------------- */
+window.addEventListener("keydown", (e) => {
+  // prevent page scroll on space
+  if (e.code === "Space") { e.preventDefault(); togglePlayback(); return; }
+  if (!images.length) return;
+  if (e.key === "ArrowLeft") {
+    stopPlaybackBriefHint();
+    slider.value = String(Math.max(1, Number(slider.value) - 1));
+    requestShow(Number(slider.value) - 1);
+  }
+  if (e.key === "ArrowRight") {
+    stopPlaybackBriefHint();
+    slider.value = String(Math.min(Number(slider.max), Number(slider.value) + 1));
+    requestShow(Number(slider.value) - 1);
   }
 });
 
-// INIT
+/* ---------------- INIT ---------------- */
 (async function init() {
   try {
     showLoading(true);
     manifest = await loadManifest();
     buildWeekMenu();
-    // Start on the FIRST (oldest) week since we list ASC. If you'd rather start newest, set to manifest.weeks.length-1.
-    weekIndex = 0;
+    // Start with newest week on mobile, oldest on desktop? Keep consistent: newest:
+    weekIndex = manifest.weeks.length - 1;
     loadWeek(weekIndex);
     showLoading(false);
-    // brief hint for spacebar
-    playhint.style.display = "block";
-    setTimeout(() => (playhint.style.display = "none"), 2000);
   } catch (err) {
     showLoading(false);
     imgEl.alt = "Failed to load manifest";
@@ -230,7 +247,5 @@ speedSelect.addEventListener("change", () => {
   }
 })();
 
-// Placeholder action
-tlBtn.addEventListener("click", () => {
-  alert("Timelapse generator coming soon ✨");
-});
+/* Placeholder */
+tlBtn?.addEventListener("click", () => alert("Timelapse generator coming soon ✨"));
