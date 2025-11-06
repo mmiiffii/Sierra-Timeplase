@@ -1,0 +1,53 @@
+name: Organize Images into Weekly Folders (Unified)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weekly-organizer-unified
+  cancel-in-progress: true
+
+jobs:
+  organize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (full history for rebase)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependency
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytz
+
+      - name: Run weekly organizer
+        run: python scripts/organize_images_weeks_unified.py
+
+      - name: Pull latest main, commit, and push
+        run: |
+          set -e
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+
+          git fetch origin main
+          git checkout main
+          git pull --rebase origin main || true
+
+          git add -A
+          git commit -m "Organize images into /images weekly folders (unified)" || echo "No changes"
+          git push origin HEAD:main || (
+            echo "Retrying after rebase…"
+            git pull --rebase origin main || true
+            git push origin HEAD:main
+          )
