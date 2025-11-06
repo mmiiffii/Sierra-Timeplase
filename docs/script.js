@@ -1,121 +1,180 @@
-const manifestUrl = "./manifest.json";
+// Config
+const manifestURL = "./manifest.json";
 
-const els = {
-  weekSelect: document.getElementById("weekSelect"),
-  gallery: document.getElementById("gallery"),
-  countBadge: document.getElementById("countBadge"),
-  prevBtn: document.getElementById("prevBtn"),
-  nextBtn: document.getElementById("nextBtn"),
-};
+// Elements
+const imgEl = document.getElementById("hero");
+const slider = document.getElementById("slider");
+const weekBtn = document.getElementById("weekBtn");
+const weekMenu = document.getElementById("weekMenu");
+const tlBtn = document.getElementById("timelapseBtn");
+const loading = document.getElementById("loading");
+const themeToggle = document.getElementById("themeToggle");
 
+// State
 let manifest = null;
-let currentWeekIdx = 0;
+let weekIndex = 0;           // default: latest week (we'll order desc)
+let images = [];             // current week image list (array of {raw, name, ...})
+let pendingIndex = null;     // requested index to show (debounced via rAF)
+let prefetchRadius = 4;      // how many neighbors to prefetch
 
-// Simple lazy loader
-const io = new IntersectionObserver((entries) => {
-  entries.forEach(e => {
-    if (e.isIntersecting) {
-      const img = e.target;
-      const src = img.getAttribute("data-src");
-      if (src) {
-        img.src = src;
-        img.removeAttribute("data-src");
-      }
-      io.unobserve(img);
-    }
-  });
-}, { rootMargin: "600px" });
+// THEME
+(function initTheme(){
+  const saved = localStorage.getItem("sierra-theme");
+  if (saved === "light" || saved === "dark") {
+    document.documentElement.setAttribute("data-theme", saved);
+    themeToggle.textContent = saved === "dark" ? "☾" : "☼";
+  }
+})();
+themeToggle.addEventListener("click", () => {
+  const current = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = current === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("sierra-theme", next);
+  themeToggle.textContent = next === "dark" ? "☾" : "☼";
+});
 
-async function loadManifest() {
-  const res = await fetch(manifestUrl, { cache: "no-cache" });
-  if (!res.ok) throw new Error("Failed to load manifest.json");
-  const data = await res.json();
-  // Sort weeks by label descending (latest first) by default
+// UTILS
+function showLoading(on) {
+  loading.style.display = on ? "block" : "none";
+}
+function setSliderMax(n) {
+  slider.max = String(Math.max(1, n));
+  slider.value = "1";
+}
+function orderWeeksDesc(data) {
+  // latest first by label; your labels are "Week XX - ...", string sort works enough
   data.weeks.sort((a,b) => a.label < b.label ? 1 : -1);
-  return data;
 }
-
-function populateWeeks() {
-  els.weekSelect.innerHTML = "";
-  manifest.weeks.forEach((wk, idx) => {
-    const opt = document.createElement("option");
-    opt.value = idx;
-    opt.textContent = `${wk.label} (${wk.count})`;
-    els.weekSelect.appendChild(opt);
-  });
-  els.weekSelect.value = String(currentWeekIdx);
-}
-
-function renderWeek(idx) {
-  const wk = manifest.weeks[idx];
-  if (!wk) return;
-  els.countBadge.textContent = wk.count;
-  els.gallery.innerHTML = "";
-
-  wk.images.forEach((img, i) => {
-    const card = document.createElement("div");
-    card.className = "card";
-
-    const image = document.createElement("img");
-    image.alt = img.name;
-    image.setAttribute("data-src", img.raw); // lazy
-    io.observe(image);
-
-    const meta = document.createElement("div");
-    meta.className = "meta";
-    meta.textContent = img.name;
-
-    card.appendChild(image);
-    card.appendChild(meta);
-    els.gallery.appendChild(card);
+function buildWeekMenu() {
+  weekMenu.innerHTML = "";
+  manifest.weeks.forEach((wk, i) => {
+    const btn = document.createElement("button");
+    btn.className = "dropdown-item";
+    btn.textContent = wk.label;
+    btn.addEventListener("click", () => {
+      weekIndex = i;
+      weekMenu.classList.remove("open");
+      loadWeek(weekIndex);
+    });
+    weekMenu.appendChild(btn);
   });
 }
+weekBtn.addEventListener("click", () => {
+  weekMenu.classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!weekMenu.contains(e.target) && e.target !== weekBtn) {
+    weekMenu.classList.remove("open");
+  }
+});
 
-function goPrev() {
-  const firstVisible = [...document.querySelectorAll(".card")].findIndex(c => {
-    const r = c.getBoundingClientRect();
-    return r.top >= 0 && r.top < window.innerHeight*0.6;
-  });
-  const idx = Math.max(0, firstVisible - 1);
-  document.querySelectorAll(".card")[idx]?.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-function goNext() {
-  const cards = [...document.querySelectorAll(".card")];
-  const firstVisible = cards.findIndex(c => {
-    const r = c.getBoundingClientRect();
-    return r.top >= 0 && r.top < window.innerHeight*0.6;
-  });
-  const idx = Math.min(cards.length - 1, firstVisible + 1);
-  cards[idx]?.scrollIntoView({ behavior: "smooth", block: "center" });
-}
-
-async function init() {
-  try {
-    manifest = await loadManifest();
-    if (!manifest.weeks || manifest.weeks.length === 0) {
-      els.gallery.innerHTML = "<p>No weeks found. Run the manifest workflow after adding images.</p>";
-      return;
+// PREFETCH
+const cache = new Map(); // url->Image object (loaded)
+function prefetchAround(idx) {
+  if (!images.length) return;
+  const lo = Math.max(0, idx - prefetchRadius);
+  const hi = Math.min(images.length - 1, idx + prefetchRadius);
+  for (let i = lo; i <= hi; i++) {
+    const url = images[i].raw;
+    if (!cache.has(url)) {
+      const im = new Image();
+      im.src = url;
+      cache.set(url, im);
     }
-    populateWeeks();
-    renderWeek(currentWeekIdx);
-
-    els.weekSelect.addEventListener("change", (e) => {
-      currentWeekIdx = Number(e.target.value);
-      renderWeek(currentWeekIdx);
-      window.scrollTo({ top: 0, behavior: "smooth" });
-    });
-    els.prevBtn.addEventListener("click", goPrev);
-    els.nextBtn.addEventListener("click", goNext);
-
-    // Keyboard shortcuts
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowLeft") goPrev();
-      if (e.key === "ArrowRight") goNext();
-    });
-  } catch (err) {
-    els.gallery.innerHTML = `<p style="color:#f66">Error loading manifest: ${err.message}</p>`;
   }
 }
 
-init();
+// RENDER
+let rafId = 0;
+function requestShow(index) {
+  pendingIndex = index;
+  if (!rafId) rafId = requestAnimationFrame(applyShow);
+}
+function applyShow() {
+  rafId = 0;
+  if (pendingIndex == null) return;
+  const idx = Math.min(Math.max(0, pendingIndex), images.length - 1);
+  const url = images[idx].raw;
+
+  // If prefetched, swap instantly; else show loading briefly
+  const pref = cache.get(url);
+  if (pref && pref.complete) {
+    showLoading(false);
+    imgEl.src = url;
+  } else {
+    showLoading(true);
+    const temp = new Image();
+    temp.onload = () => {
+      showLoading(false);
+      imgEl.src = url;
+      cache.set(url, temp);
+    };
+    temp.onerror = () => showLoading(false);
+    temp.src = url;
+  }
+
+  // Warm next/prev
+  prefetchAround(idx);
+}
+
+// LOAD
+async function loadManifest() {
+  const res = await fetch(manifestURL, { cache: "no-cache" });
+  if (!res.ok) throw new Error("Failed to load manifest.json");
+  const data = await res.json();
+  if (!data.weeks || !data.weeks.length) throw new Error("No weeks in manifest");
+  orderWeeksDesc(data);
+  return data;
+}
+
+function loadWeek(i) {
+  const wk = manifest.weeks[i];
+  images = wk.images || [];
+  setSliderMax(images.length);
+  cache.clear();
+  if (images.length) {
+    // start near sunrise-ish: 06:00 = index ~ (6*60/5) if 5-min cadence; fall back to 1
+    const suggested = Math.min(images.length, 75); // ~6h at 5-min → 72; mild bias
+    slider.value = String(Math.max(1, suggested));
+    requestShow(Number(slider.value) - 1);
+  } else {
+    imgEl.removeAttribute("src");
+  }
+}
+
+// SLIDER
+slider.addEventListener("input", () => {
+  requestShow(Number(slider.value) - 1);
+});
+
+// KEYBOARD
+window.addEventListener("keydown", (e) => {
+  if (!images.length) return;
+  if (e.key === "ArrowLeft") {
+    slider.value = String(Math.max(1, Number(slider.value) - 1));
+    requestShow(Number(slider.value) - 1);
+  }
+  if (e.key === "ArrowRight") {
+    slider.value = String(Math.min(Number(slider.max), Number(slider.value) + 1));
+    requestShow(Number(slider.value) - 1);
+  }
+});
+
+// INIT
+(async function init(){
+  try {
+    showLoading(true);
+    manifest = await loadManifest();
+    buildWeekMenu();
+    loadWeek(0); // latest week
+  } catch (err) {
+    showLoading(false);
+    imgEl.alt = "Failed to load manifest";
+    console.error(err);
+  }
+})();
+ 
+// Placeholder action
+document.getElementById("timelapseBtn").addEventListener("click", () => {
+  alert("Timelapse generator coming soon ✨");
+});
