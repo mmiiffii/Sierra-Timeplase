@@ -1,31 +1,39 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
-  <title>Sierra Timelapse — Image Viewer</title>
+  <title>Sierra Viewer</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <header class="header">
-    <h1>Sierra Timelapse</h1>
-    <div class="controls">
-      <label for="weekSelect">Week:</label>
-      <select id="weekSelect"></select>
-      <span id="countBadge" title="Images in this week">0</span>
+  <header class="topbar">
+    <div class="brand">Sierra</div>
+
+    <nav class="menu">
+      <div class="dropdown">
+        <button class="btn ghost" id="weekBtn">Week ▾</button>
+        <div class="dropdown-menu" id="weekMenu"></div>
+      </div>
+
+      <button class="btn ghost" id="timelapseBtn">Generate timelapse</button>
+
       <div class="spacer"></div>
-      <button id="prevBtn" title="Go to previous image">⟨ Prev</button>
-      <button id="nextBtn" title="Go to next image">Next ⟩</button>
-    </div>
+
+      <button class="btn ghost" id="themeToggle" title="Toggle light/dark">☾</button>
+    </nav>
   </header>
 
-  <main class="content">
-    <div id="gallery" class="gallery"></div>
-  </main>
+  <main class="stage">
+    <div class="image-wrap">
+      <img id="hero" alt="" />
+      <div class="loading" id="loading">Loading…</div>
+    </div>
 
-  <footer class="footer">
-    <p>Built from repo images via manifest.json — updates automatically when images change.</p>
-  </footer>
+    <div class="scrubber">
+      <input id="slider" type="range" min="1" max="1" value="1" />
+    </div>
+  </main>
 
   <script src="./script.js"></script>
 </body>
