@@ -11,13 +11,12 @@
     <div class="brand">Sierra</div>
 
     <nav class="menu" role="navigation">
-      <!-- Week dropdown -->
+      <!-- Week dropdown (shows selected week label) -->
       <div class="dropdown" data-behavior="sheet">
-        <button class="btn ghost" id="weekBtn" aria-haspopup="listbox" aria-expanded="false">Week ▾</button>
+        <button class="btn ghost wide" id="weekBtn" aria-haspopup="listbox" aria-expanded="false">Select week ▾</button>
         <div class="dropdown-menu" id="weekMenu" role="listbox" aria-label="Choose week"></div>
       </div>
 
-      <!-- Timelapse placeholder -->
       <button class="btn ghost hide-sm" id="timelapseBtn">Generate timelapse</button>
 
       <div class="spacer"></div>
@@ -27,13 +26,12 @@
         ▶
       </button>
 
-      <!-- Speed -->
+      <!-- Speed (cleaned: 1×, 2×, 4×, 8×) -->
       <select id="speedSelect" class="btn ghost small" title="Playback speed" aria-label="Speed">
-        <option value="0.25">0.25×</option>
-        <option value="0.5">0.5×</option>
         <option value="1" selected>1×</option>
         <option value="2">2×</option>
         <option value="4">4×</option>
+        <option value="8">8×</option>
       </select>
 
       <!-- Theme -->
@@ -45,8 +43,6 @@
     <div class="image-wrap">
       <img id="hero" alt="" />
       <div class="loading" id="loading">Loading…</div>
-
-      <!-- Large mobile play button overlay -->
       <button class="fab-play" id="fabPlay" aria-label="Play / Pause">▶</button>
     </div>
 
@@ -55,7 +51,6 @@
     </div>
   </main>
 
-  <!-- Mobile-only bottom sheet backdrop for dropdown -->
   <div class="sheet-backdrop" id="sheetBackdrop"></div>
 
   <script src="./script.js"></script>

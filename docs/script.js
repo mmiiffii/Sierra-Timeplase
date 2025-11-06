@@ -45,6 +45,11 @@ function showLoading(on) { loading.style.display = on ? "block" : "none"; }
 function setSliderMax(n) { slider.max = String(Math.max(1, n)); slider.value = "1"; }
 function orderWeeksAsc(data) { data.weeks.sort((a,b) => a.label > b.label ? 1 : -1); }
 
+function updateWeekButtonLabel() {
+  const wk = manifest?.weeks?.[weekIndex];
+  if (wk) weekBtn.textContent = wk.label + " ▾";
+}
+
 function buildWeekMenu() {
   weekMenu.innerHTML = "";
   manifest.weeks.forEach((wk, i) => {
@@ -64,7 +69,6 @@ function buildWeekMenu() {
 function openWeekMenu() {
   weekBtn.setAttribute("aria-expanded", "true");
   weekMenu.classList.add("open");
-  // On mobile, show backdrop
   if (window.matchMedia("(max-width: 719px)").matches) {
     sheetBackdrop.classList.add("open");
   }
@@ -148,6 +152,7 @@ function loadWeek(i) {
   images = wk.images || [];
   setSliderMax(images.length);
   cache.clear();
+  updateWeekButtonLabel();
   if (images.length) {
     slider.value = "1";
     requestShow(0);
@@ -158,7 +163,7 @@ function loadWeek(i) {
 
 /* ---------------- SLIDER ---------------- */
 slider.addEventListener("input", () => {
-  stopPlaybackBriefHint();
+  stopPlayback();
   requestShow(Number(slider.value) - 1);
 });
 
@@ -183,11 +188,6 @@ function stopPlayback() {
   playToggle.setAttribute("aria-pressed", "false");
   fabPlay.textContent = "▶";
 }
-let hintTimer = null;
-function stopPlaybackBriefHint() {
-  stopPlayback();
-  // No explicit hint element now; button state is clear.
-}
 function tickForward() {
   if (!images.length) return;
   let idx = Number(slider.value) - 1;
@@ -208,23 +208,22 @@ function togglePlayback() { playing ? stopPlayback() : startPlayback(); }
 playToggle.addEventListener("click", togglePlayback);
 fabPlay.addEventListener("click", togglePlayback);
 
-// Tap image to toggle chrome on mobile (optional: keep simple -> toggle playback)
+// Tap image toggles playback on mobile
 imgEl.addEventListener("click", () => {
   if (window.matchMedia("(max-width: 719px)").matches) togglePlayback();
 });
 
 /* ---------------- KEYBOARD (desktop) ---------------- */
 window.addEventListener("keydown", (e) => {
-  // prevent page scroll on space
   if (e.code === "Space") { e.preventDefault(); togglePlayback(); return; }
   if (!images.length) return;
   if (e.key === "ArrowLeft") {
-    stopPlaybackBriefHint();
+    stopPlayback();
     slider.value = String(Math.max(1, Number(slider.value) - 1));
     requestShow(Number(slider.value) - 1);
   }
   if (e.key === "ArrowRight") {
-    stopPlaybackBriefHint();
+    stopPlayback();
     slider.value = String(Math.min(Number(slider.max), Number(slider.value) + 1));
     requestShow(Number(slider.value) - 1);
   }
@@ -236,7 +235,7 @@ window.addEventListener("keydown", (e) => {
     showLoading(true);
     manifest = await loadManifest();
     buildWeekMenu();
-    // Start with newest week on mobile, oldest on desktop? Keep consistent: newest:
+    // Start with newest
     weekIndex = manifest.weeks.length - 1;
     loadWeek(weekIndex);
     showLoading(false);
