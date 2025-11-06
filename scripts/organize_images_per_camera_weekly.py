@@ -139,4 +139,18 @@ def organize():
 
     # Audit
     TS = time.strftime("%Y%m%d_%H%M%S")
-    audit_txt = DEST_ROOT / f"organize
+    audit_txt = DEST_ROOT / f"organize_weeks_per_camera_audit_{TS}.txt"
+    with open(audit_txt, "w", encoding="utf-8") as f:
+        f.write("Organize by week per camera audit\n")
+        f.write(f"UTC run: {TS}\n\n")
+        f.write(f"Moved: {len(moved)}\nUnchanged: {len(unchanged)}\nSkipped: {len(skipped)}\n\n")
+        for s,d in moved:
+            f.write(f"MOVED: {s} -> {d}\n")
+        for s in unchanged:
+            f.write(f"UNCHANGED: {s}\n")
+        for s,why in skipped:
+            f.write(f"SKIPPED: {s} ({why})\n")
+    print(f"✅ Audit written to {audit_txt}")
+
+if __name__ == "__main__":
+    organize()
