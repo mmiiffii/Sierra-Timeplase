@@ -1,6 +1,7 @@
 # Sierra Nevada — Timelapse Archive
 
-An ongoing, lightweight archive of Sierra Nevada webcam captures.  
+An ongoing archive of the Pradollano, Sierra Nevada webcam. 
+
 Frames are gathered every few minutes, sorted by week, cleaned of glitches, and published to a simple website for fast scrolling and playback.
 
 **Open the viewer:** https://mmiiffii.github.io/Sierra-timelapse/
