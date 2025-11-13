@@ -1,24 +1,23 @@
-Sierra Timelapse
+**Sierra Nevada — Timelapse Archive**
 
-A quiet little machine watching Sierra Nevada — collecting frames, sorting them into time, and turning them into something you can scroll through like a living photograph.
+An ongoing, lightweight archive of Sierra Nevada webcam captures.
+Frames are gathered every few minutes, sorted by week, cleaned of glitches, and published to a simple website for fast scrolling and playback.
 
-This repository automatically downloads webcam stills from the Pradollano camera, organizes them into neat weekly folders, cleans out glitched frames, and serves them through a minimal, touch-friendly viewer on GitHub Pages.
+Open the viewer: https://mmiiffii.github.io/Sierra-timelapse/
 
-Live Viewer
+What this repo does
 
-Explore any captured week directly in your browser:
-👉 https://mmiiffii.github.io/Sierra-timelapse
+Captures stills from the Pradollano webcam and stores them inside week-numbered folders.
 
-Once the page opens, choose a week from the top menu, then use the slider or play controls to move through the images.
-The focus is pure visual flow — no timestamps, no clutter, just the mountain shifting from morning to night.
+Removes broken, grey, or partially loaded frames to keep timelines smooth.
 
-Timelapse Generation
+Generates small JSON manifests so the web viewer can load quickly.
 
-The project includes a GitHub Action that can build full timelapse videos from the captured images.
-It runs behind the scenes for now, publishing results into Releases. A lightweight, on-page timelapse generator is on the roadmap for the viewer.
+Publishes a lightweight interface that lets you scrub, slide, or autoplay through each week.
 
-What This Repository Does
+Includes a GitHub Action that can generate full timelapse videos (viewer integration coming soon).
 
-This project captures a single webcam feed at regular intervals, stores everything in structured weekly archives, cleans the data, and exposes it through a simple, elegant UI. It’s both a small archiving tool and a long-form aesthetic experiment — a way of watching weather, light, and time roll across the slopes.
+Quick camera link
 
-More refinements are coming, including pruning unneeded legacy files and tightening the underlying structure.
+Pradollano — still image
+https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg
