@@ -1,4 +1,4 @@
-name: Capture Webcam Image (every 4 minutes)
+aname: Capture Webcam Image (every 4 minutes)
 
 on:
   schedule:
