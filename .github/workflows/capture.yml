@@ -1,9 +1,9 @@
-aname: Capture Webcam Image (every 4 minutes)
+name: Capture Webcam Image (every 4 minutes)
 
 on:
   schedule:
     - cron: "*/4 * * * *"     # every 4 minutes (UTC)
-  workflow_dispatch:           # manual trigger
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,7 +14,7 @@ concurrency:
 
 env:
   CAMERA_HOST: recursos.sierranevada.es
-  CAMERA_IP: 93.95.210.77      # <-- REPLACE with the IP from nslookup
+  CAMERA_IP: 123.45.67.89     # <-- put the IP that is currently working for you
   CAMERA_PATH: "/_extras/fotos_camaras/pradollano/snap_c1.jpg"
 
 jobs:
@@ -28,24 +28,46 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      # Debug-only: log what DNS sees right now (does NOT affect capture)
+      - name: Debug DNS for camera host
+        run: |
+          echo "### DNS debug for ${CAMERA_HOST} ###"
+          which nslookup || echo "nslookup not found"
+          which dig || echo "dig not found"
+
+          echo
+          echo "nslookup (if available):"
+          nslookup "${CAMERA_HOST}" || echo "nslookup failed"
+
+          echo
+          echo "dig (if available):"
+          dig +short "${CAMERA_HOST}" || echo "dig failed or not installed"
+
+          echo "#####################################"
+
       - name: Capture image via IP (DNS bypass)
         run: |
           set -e
+
+          if [ -z "${CAMERA_IP:-}" ]; then
+            echo "❌ CAMERA_IP is not set. Please set it in the env block of this workflow."
+            exit 1
+          fi
 
           URL="https://${CAMERA_HOST}${CAMERA_PATH}"
           OUT_DIR="images_5min"
           mkdir -p "$OUT_DIR"
 
-          # Timestamp in Europe/Madrid for filename consistency
+          # Timestamp in Europe/Madrid for filename
           TS="$(TZ=Europe/Madrid date +'%y%m%d_%H%M%S')"
           OUT_FILE="${OUT_DIR}/image_${TS}.jpg"
 
           echo "Attempting capture at $TS"
-          echo "Using IP ${CAMERA_IP} for host ${CAMERA_HOST}"
+          echo "Using ${CAMERA_HOST} resolved to fixed IP ${CAMERA_IP}"
 
-          # Hit the IP directly, but send the correct Host header for HTTPS
+          # Use the IP directly but keep correct Host header for TLS
           if curl -fSL \
-                --retry 3 \
+                --retry 2 \
                 --retry-delay 5 \
                 --connect-timeout 10 \
                 --max-time 25 \
