@@ -14,7 +14,6 @@ concurrency:
 
 env:
   CAMERA_HOST: recursos.sierranevada.es
-  CAMERA_IP: 123.45.67.89     # <-- put the IP that is currently working for you
   CAMERA_PATH: "/_extras/fotos_camaras/pradollano/snap_c1.jpg"
 
 jobs:
@@ -28,31 +27,35 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      # Debug-only: log what DNS sees right now (does NOT affect capture)
-      - name: Debug DNS for camera host
-        run: |
-          echo "### DNS debug for ${CAMERA_HOST} ###"
-          which nslookup || echo "nslookup not found"
-          which dig || echo "dig not found"
-
-          echo
-          echo "nslookup (if available):"
-          nslookup "${CAMERA_HOST}" || echo "nslookup failed"
-
-          echo
-          echo "dig (if available):"
-          dig +short "${CAMERA_HOST}" || echo "dig failed or not installed"
-
-          echo "#####################################"
-
-      - name: Capture image via IP (DNS bypass)
+      # Resolve IP fresh each run using public DNS, but don't write any repo files.
+      - name: Resolve camera IP (runtime only)
+        id: resolve
         run: |
           set -e
 
-          if [ -z "${CAMERA_IP:-}" ]; then
-            echo "❌ CAMERA_IP is not set. Please set it in the env block of this workflow."
-            exit 1
+          echo "Resolving ${CAMERA_HOST} via public resolvers…"
+
+          IP=""
+          for resolver in 1.1.1.1 8.8.8.8; do
+            echo "  -> trying $resolver"
+            CANDIDATE="$(dig +short ${CAMERA_HOST} @$resolver A | head -n1 || true)"
+            if [ -n "$CANDIDATE" ]; then
+              IP="$CANDIDATE"
+              echo "Resolved ${CAMERA_HOST} -> $IP via $resolver"
+              break
+            fi
+          done
+
+          if [ -z "$IP" ]; then
+            echo "⚠️ Could not resolve IP via public resolvers. Will fall back to normal DNS in curl."
+            echo "CAMERA_IP=" >> "$GITHUB_ENV"
+          else
+            echo "CAMERA_IP=$IP" >> "$GITHUB_ENV"
           fi
+
+      - name: Capture image (try IP first, then DNS)
+        run: |
+          set -e
 
           URL="https://${CAMERA_HOST}${CAMERA_PATH}"
           OUT_DIR="images_5min"
@@ -62,26 +65,60 @@ jobs:
           TS="$(TZ=Europe/Madrid date +'%y%m%d_%H%M%S')"
           OUT_FILE="${OUT_DIR}/image_${TS}.jpg"
 
-          echo "Attempting capture at $TS"
-          echo "Using ${CAMERA_HOST} resolved to fixed IP ${CAMERA_IP}"
+          echo "===== Capture run at $TS ====="
+          echo "Target URL: $URL"
+          echo "Resolved IP (if any): ${CAMERA_IP:-<none>}"
+          echo
 
-          # Use the IP directly but keep correct Host header for TLS
-          if curl -fSL \
-                --retry 2 \
-                --retry-delay 5 \
-                --connect-timeout 10 \
-                --max-time 25 \
-                --resolve "${CAMERA_HOST}:443:${CAMERA_IP}" \
-                -H "Host: ${CAMERA_HOST}" \
-                -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
-                "$URL" -o "$OUT_FILE"; then
-            echo "✅ Saved $OUT_FILE"
+          capture_ok=false
+
+          # Function: attempt capture with a given curl command
+          try_capture() {
+            desc="$1"
+            shift
+            echo "Trying capture via: $desc"
+            if curl -fSL \
+                  --retry 4 \
+                  --retry-delay 5 \
+                  --connect-timeout 10 \
+                  --max-time 40 \
+                  -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
+                  "$@" \
+                  "$URL" -o "$OUT_FILE"; then
+              echo "✅ Capture succeeded via: $desc"
+              capture_ok=true
+            else
+              echo "⚠️ Capture failed via: $desc"
+              rm -f "$OUT_FILE" || true
+            fi
+          }
+
+          # 1) If we have an IP, try IP-based capture with --resolve (bypasses GitHub DNS)
+          if [ -n "${CAMERA_IP:-}" ]; then
+            try_capture "IP + --resolve" \
+              --resolve "${CAMERA_HOST}:443:${CAMERA_IP}" \
+              -H "Host: ${CAMERA_HOST}"
           else
-            echo "⚠️  Failed to fetch image (network / HTTP error). Skipping this frame."
-            rm -f "$OUT_FILE" || true
+            echo "No CAMERA_IP available from resolver step."
           fi
 
+          # 2) If still not OK, try normal DNS (maybe GitHub's resolver works now)
+          if [ "$capture_ok" = false ]; then
+            try_capture "plain DNS" 
+          fi
+
+          # Final check
+          if [ "$capture_ok" = false ]; then
+            echo "❌ All capture attempts failed. No image saved this run."
+            # Make this a hard failure so you *know* about it.
+            exit 1
+          fi
+
+          ls -lh "$OUT_FILE" || true
+          echo "================================="
+
       - name: Commit and push new images
+        if: success()    # only commit if capture actually succeeded
         run: |
           set -e
           git config user.name "GitHub Actions"
