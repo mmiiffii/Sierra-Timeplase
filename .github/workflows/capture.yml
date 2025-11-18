@@ -2,8 +2,11 @@ name: Capture Webcam Image (5-Minute Interval)
 
 on:
   schedule:
-    - cron: "*/2 * * * *"   # every 2 minutes
-  workflow_dispatch:         # allows manual trigger
+    - cron: "*/2 * * * *"   # every 2 minutes (UTC)
+  workflow_dispatch:         # allow manual trigger
+
+permissions:
+  contents: write
 
 jobs:
   capture:
@@ -11,65 +14,79 @@ jobs:
     concurrency:
       group: capture_job
       cancel-in-progress: true   # prevents overlap if a run is delayed
+
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          python-version: '3.11'
+          fetch-depth: 0
+          persist-credentials: true
 
-      - name: Cache pip dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
-
-      - name: Install dependencies
+      - name: Capture image (tolerant + lightweight)
         run: |
-          pip install --quiet requests pillow piexif
+          python3 - << 'PYCODE'
+          import sys, time, random
+          from pathlib import Path
+          from urllib.request import urlopen, Request
+          from urllib.error import URLError, HTTPError
 
-      - name: Capture image
-        run: |
-          python3 - <<'PYCODE'
-          import requests, os, datetime, piexif
-          from io import BytesIO
+          URL = "https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg"
+          OUT_DIR = Path("images_5min")
+          OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-          IMAGE_URL = "https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg"
-          SAVE_DIR = "images_5min"
-          os.makedirs(SAVE_DIR, exist_ok=True)
+          # Small random jitter so we don't always hit the camera at the exact same second
+          jitter = random.randint(0, 20)
+          time.sleep(jitter)
 
-          def get_exif_timestamp(image_bytes):
-              try:
-                  exif = piexif.load(image_bytes)
-                  dt = exif["0th"].get(piexif.ImageIFD.DateTime)
-                  if dt:
-                      return datetime.datetime.strptime(dt.decode(), "%Y:%m:%d %H:%M:%S")
-              except Exception:
-                  pass
-              return None
+          ts = time.strftime("%y%m%d_%H%M%S", time.gmtime())
+          filename = f"image_{ts}.jpg"
+          path = OUT_DIR / filename
 
-          r = requests.get(IMAGE_URL, timeout=20)
-          if r.status_code == 200:
-              exif_time = get_exif_timestamp(r.content)
-              now = datetime.datetime.utcnow()
-              ts = exif_time or now
-              fname = ts.strftime("image_%Y%m%d_%H%M%S.jpg")
-              path = os.path.join(SAVE_DIR, fname)
-              with open(path, "wb") as f:
-                  f.write(r.content)
-              print(f"✅ Saved {path}")
-          else:
-              print(f"❌ HTTP error {r.status_code}")
+          headers = {
+              "User-Agent": "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)",
+              "Accept": "image/*,application/octet-stream;q=0.9,*/*;q=0.8",
+          }
+
+          try:
+              req = Request(URL, headers=headers)
+              with urlopen(req, timeout=20) as resp:
+                  status = getattr(resp, "status", 200)
+                  if status != 200:
+                      print(f"⚠️  Camera returned HTTP {status}, skipping this capture.")
+                      sys.exit(0)
+                  data = resp.read()
+          except (URLError, HTTPError) as e:
+              print("⚠️  Skipping this capture – network / DNS error while fetching image:")
+              print("   ", e)
+              # Exit 0 so the workflow is "success" but we just didn't get a frame
+              sys.exit(0)
+
+          if not data:
+              print("⚠️  Received empty response, skipping save.")
+              sys.exit(0)
+
+          # Avoid overwriting if timestamp collides for any reason
+          base, ext = path.stem, path.suffix
+          i = 1
+          while path.exists():
+              path = OUT_DIR / f"{base}_{i}{ext}"
+              i += 1
+
+          with open(path, "wb") as f:
+              f.write(data)
+
+          print(f"✅ Saved {path}")
           PYCODE
 
       - name: Commit and push image
         run: |
+          set -e
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git add images_5min/
-          git commit -m "Add image" || echo "No changes"
-          git pull
-          git push
+
+          git add images_5min/ || true
+          git commit -m "Add 5-min capture" || echo "No changes"
+
+          git fetch origin main
+          git pull --rebase origin main || true
+          git push origin HEAD:main || echo "Push failed (likely race with another job)"
