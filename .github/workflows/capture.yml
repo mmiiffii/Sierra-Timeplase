@@ -2,8 +2,8 @@ name: Capture Webcam Image (every 4 minutes)
 
 on:
   schedule:
-    - cron: "*/4 * * * *"   # every 4 minutes (UTC)
-  workflow_dispatch:         # allow manual runs
+    - cron: "*/4 * * * *"     # every 4 minutes (UTC)
+  workflow_dispatch:           # manual trigger
 
 permissions:
   contents: write
@@ -11,6 +11,11 @@ permissions:
 concurrency:
   group: capture-every4min
   cancel-in-progress: true
+
+env:
+  CAMERA_HOST: recursos.sierranevada.es
+  CAMERA_IP: 93.95.210.77      # <-- REPLACE with the IP from nslookup
+  CAMERA_PATH: "/_extras/fotos_camaras/pradollano/snap_c1.jpg"
 
 jobs:
   capture:
@@ -23,31 +28,34 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Capture image (curl, tolerant)
+      - name: Capture image via IP (DNS bypass)
         run: |
           set -e
 
-          URL="https://recursos.sierranevada.es/_extras/fotos_camaras/pradollano/snap_c1.jpg"
+          URL="https://${CAMERA_HOST}${CAMERA_PATH}"
           OUT_DIR="images_5min"
           mkdir -p "$OUT_DIR"
 
-          # UTC timestamp for filename (yyMMdd_HHmmss)
-          TS="$(date -u +'%y%m%d_%H%M%S')"
-          OUT_FILE="$OUT_DIR/image_${TS}.jpg"
+          # Timestamp in Europe/Madrid for filename consistency
+          TS="$(TZ=Europe/Madrid date +'%y%m%d_%H%M%S')"
+          OUT_FILE="${OUT_DIR}/image_${TS}.jpg"
 
           echo "Attempting capture at $TS"
+          echo "Using IP ${CAMERA_IP} for host ${CAMERA_HOST}"
 
-          # Try a few times, but don't fail the workflow if the host is down/DNS is flaky
+          # Hit the IP directly, but send the correct Host header for HTTPS
           if curl -fSL \
                 --retry 3 \
                 --retry-delay 5 \
                 --connect-timeout 10 \
                 --max-time 25 \
+                --resolve "${CAMERA_HOST}:443:${CAMERA_IP}" \
+                -H "Host: ${CAMERA_HOST}" \
                 -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
                 "$URL" -o "$OUT_FILE"; then
             echo "✅ Saved $OUT_FILE"
           else
-            echo "⚠️  Failed to fetch image (DNS / network / HTTP error). Skipping this frame."
+            echo "⚠️  Failed to fetch image (network / HTTP error). Skipping this frame."
             rm -f "$OUT_FILE" || true
           fi
 
