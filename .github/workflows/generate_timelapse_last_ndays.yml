@@ -1,0 +1,313 @@
+name: Generate timelapse (last N days)
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days to include (look back from now, Europe/Madrid)"
+        required: true
+        default: "7"
+      fps:
+        description: "Frames per second for output video"
+        required: true
+        default: "24"
+      strictness:
+        description: "Time strictness 1 (loose, organic) → 10 (strict, grid-like)"
+        required: true
+        default: "5"
+
+permissions:
+  contents: write
+
+jobs:
+  timelapse:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies (Pillow, NumPy, ffmpeg)
+        run: |
+          set -e
+          python -m pip install --upgrade pip
+          pip install pillow numpy
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Build timelapse from last N days
+        env:
+          DAYS: ${{ github.event.inputs.days }}
+          FPS: ${{ github.event.inputs.fps }}
+          STRICTNESS: ${{ github.event.inputs.strictness }}
+        run: |
+          python3 - << 'PYCODE'
+          import os
+          import re
+          import math
+          import subprocess
+          from pathlib import Path
+          from datetime import datetime, timedelta
+          from statistics import median
+          from zoneinfo import ZoneInfo
+
+          import numpy as np
+          from PIL import Image
+
+          # ---------------- CONFIG ----------------
+          days_back = int(os.environ.get("DAYS", "7"))
+          fps = float(os.environ.get("FPS", "24"))
+          strict_val = int(os.environ.get("STRICTNESS", "5"))
+          strict_val = max(1, min(10, strict_val))
+          strictness = (strict_val - 1) / 9.0  # 0..1
+
+          tz = ZoneInfo("Europe/Madrid")
+          now = datetime.now(tz=tz)
+          cutoff = now - timedelta(days=days_back)
+
+          repo_root = Path(".").resolve()
+
+          # Image locations — adjust if you change layout later
+          search_dirs = [
+              repo_root / "images",        # weekly / historic
+              repo_root / "images_5min",   # recent 5-min captures
+          ]
+
+          # filename pattern: image_YYMMDD_HHMMSS or image_YYYYMMDD_HHMMSS
+          re_ts_6 = re.compile(r"image_(\d{6})_(\d{6})", re.IGNORECASE)
+          re_ts_8 = re.compile(r"image_(\d{8})_(\d{6})", re.IGNORECASE)
+
+          def parse_timestamp_from_name(name: str):
+            m = re_ts_8.search(name)
+            if m:
+              datestr, timestr = m.group(1), m.group(2)
+              # YYYYMMDD_HHMMSS
+              try:
+                dt = datetime.strptime(datestr + timestr, "%Y%m%d%H%M%S")
+                return dt.replace(tzinfo=tz)
+              except ValueError:
+                return None
+            m = re_ts_6.search(name)
+            if m:
+              datestr, timestr = m.group(1), m.group(2)
+              # YYMMDD_HHMMSS -> 20YYMMDD
+              try:
+                dt = datetime.strptime("20" + datestr + timestr, "%Y%m%d%H%M%S")
+                return dt.replace(tzinfo=tz)
+              except ValueError:
+                return None
+            return None
+
+          def is_valid_frame(path: Path) -> bool:
+            """Filter out black/grey/partial/glitched frames using simple image stats."""
+            try:
+              with Image.open(path) as im:
+                im = im.convert("L")  # grayscale
+                arr = np.array(im, dtype=np.uint8)
+            except Exception as e:
+              print(f"Skipping {path} – cannot open ({e})")
+              return False
+
+            # Partial loads tend to be much smaller or oddly sized, but be conservative
+            h, w = arr.shape
+            if h < 100 or w < 100:
+              print(f"Skipping {path} – suspiciously small ({w}x{h})")
+              return False
+
+            mean = float(arr.mean())
+            std = float(arr.std())
+
+            # Heuristics:
+            # - Almost black or almost white
+            if mean < 5 or mean > 250:
+              print(f"Skipping {path} – mean too extreme (mean={mean:.1f})")
+              return False
+
+            # - Very low contrast (flat grey / half-loaded)
+            if std < 3:
+              print(f"Skipping {path} – too little contrast (std={std:.2f})")
+              return False
+
+            # - If >99.5% of pixels are within a tiny band, treat as bad
+            low = arr.min()
+            high = arr.max()
+            if high - low < 5:
+              print(f"Skipping {path} – dynamic range tiny (min={low}, max={high})")
+              return False
+
+            return True
+
+          # ---------------- COLLECT FRAMES ----------------
+          frames = []  # list of (dt, path)
+
+          for root_dir in search_dirs:
+            if not root_dir.exists():
+              continue
+            for p in root_dir.rglob("*.jpg"):
+              ts = parse_timestamp_from_name(p.name)
+              if not ts:
+                continue
+              if ts < cutoff or ts > now:
+                continue
+              frames.append((ts, p))
+
+          if not frames:
+            print(f"No frames found in last {days_back} days.")
+            raise SystemExit(1)
+
+          frames.sort(key=lambda x: x[0])
+
+          print(f"Found {len(frames)} raw frames in last {days_back} days, filtering glitches…")
+
+          valid_frames = []
+          for ts, path in frames:
+            if is_valid_frame(path):
+              valid_frames.append((ts, path))
+
+          if not valid_frames:
+            print("All candidate frames were rejected as glitched/blank.")
+            raise SystemExit(1)
+
+          print(f"{len(valid_frames)} frames remain after glitch filtering.")
+
+          # ---------------- TIME REGULARISATION ----------------
+          times = [f[0] for f in valid_frames]
+          paths = [f[1] for f in valid_frames]
+
+          if len(times) < 2:
+            print("Not enough frames for regularisation; using raw order.")
+            seq_indices = list(range(len(times)))
+          else:
+            # Compute median interval (in seconds)
+            diffs = []
+            for i in range(1, len(times)):
+              dt_sec = (times[i] - times[i-1]).total_seconds()
+              if dt_sec > 0:
+                diffs.append(dt_sec)
+            if not diffs:
+              nominal = 300.0
+            else:
+              nominal = median(diffs)
+              nominal = max(60.0, min(nominal, 900.0))  # clamp between 1 and 15 minutes
+
+            print(f"Nominal interval ≈ {nominal:.1f}s based on median spacing.")
+
+            # Build regular time grid from earliest to latest
+            t_start = times[0]
+            t_end = times[-1]
+            total_span = (t_end - t_start).total_seconds()
+            n_steps = max(1, int(total_span / nominal))
+            grid = [t_start + timedelta(seconds=i * nominal) for i in range(n_steps + 1)]
+
+            # strictness: 0 = very forgiving, 1 = very strict
+            # control how far away in time we're willing to pick a frame
+            # at strictness=1, ~1 * nominal; at 0, allow ~5 * nominal
+            max_dev_strict = nominal
+            max_dev_loose = 5 * nominal
+            max_dev = max_dev_loose + strictness * (max_dev_strict - max_dev_loose)
+
+            print(f"Using max deviation {max_dev:.1f}s for matching frames to grid (strictness={strict_val}/10).")
+
+            seq_indices = []
+            j = 0  # pointer into valid_frames
+
+            last_idx = 0
+            for g in grid:
+              # advance pointer while time < grid
+              while j + 1 < len(times) and times[j + 1] <= g:
+                j += 1
+              # Now candidate j is last <= g, and j+1 is next > g if exists
+              best_idx = j
+              best_dt = abs((times[j] - g).total_seconds())
+              if j + 1 < len(times):
+                dt2 = abs((times[j+1] - g).total_seconds())
+                if dt2 < best_dt:
+                  best_dt = dt2
+                  best_idx = j+1
+
+              if best_dt <= max_dev:
+                seq_indices.append(best_idx)
+                last_idx = best_idx
+              else:
+                # No nearby frame; hold last frame
+                seq_indices.append(last_idx)
+
+            # Optionally: prevent the sequence from being insanely long
+            # by lightly compressing duplicate runs based on strictness
+            compressed = []
+            i = 0
+            while i < len(seq_indices):
+              idx = seq_indices[i]
+              run_len = 1
+              while i + run_len < len(seq_indices) and seq_indices[i + run_len] == idx:
+                run_len += 1
+
+              # keep between 1 and full run_len depending on strictness
+              # strictness=0  -> 1 frame
+              # strictness=1  -> full run
+              keep = int(1 + strictness * (run_len - 1))
+              for _ in range(keep):
+                compressed.append(idx)
+
+              i += run_len
+
+            seq_indices = compressed
+            print(f"Final sequence length after time-regularisation: {len(seq_indices)} frames.")
+
+          # Map indices to paths
+          seq_paths = [paths[i] for i in seq_indices]
+
+          # ---------------- WRITE CONCAT LIST ----------------
+          timelapses_dir = repo_root / "timelapses"
+          timelapses_dir.mkdir(parents=True, exist_ok=True)
+
+          stamp = now.strftime("%Y%m%d_%H%M%S")
+          out_name = f"timelapse_last{days_back}d_{int(fps)}fps_s{strict_val}_{stamp}.mp4"
+          out_path = timelapses_dir / out_name
+          list_path = timelapses_dir / f"frames_last{days_back}d_{stamp}.txt"
+
+          with list_path.open("w", encoding="utf-8") as f:
+            for p in seq_paths:
+              # absolute paths are safer here
+              f.write(f"file '{str(p.resolve()).replace(\"'\",\"'\\\\''\")}'\n")
+
+          print(f"Frame list written to {list_path}")
+          print(f"Output will be {out_path}")
+
+          # ---------------- RUN FFMPEG ----------------
+          cmd = [
+              "ffmpeg",
+              "-y",
+              "-f", "concat",
+              "-safe", "0",
+              "-r", str(fps),          # input frame rate
+              "-i", str(list_path),
+              "-c:v", "libx264",
+              "-pix_fmt", "yuv420p",
+              "-r", str(fps),          # output frame rate
+              str(out_path),
+          ]
+
+          print("Running ffmpeg:")
+          print(" ".join(cmd))
+          subprocess.run(cmd, check=True)
+          print(f"✅ Timelapse created at {out_path}")
+
+          # Export path for next step if needed
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as envf:
+            envf.write(f"TIMELAPSE_PATH={out_path}\n")
+          PYCODE
+
+      # Optional: publish as a Release asset (keeps repo light)
+      - name: Upload timelapse to GitHub Release
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "timelapse-${{ github.run_id }}"
+          name: "Timelapse last ${{ github.event.inputs.days }} days @ ${{ github.event.inputs.fps }}fps"
+          files: ${{ env.TIMELAPSE_PATH }}
