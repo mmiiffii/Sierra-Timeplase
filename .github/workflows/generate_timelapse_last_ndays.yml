@@ -1,4 +1,4 @@
-name: Generate timelapse (last N days)
+name: Generate Timelapse (last N days)
 
 on:
   workflow_dispatch:
@@ -113,7 +113,6 @@ jobs:
               print(f"Skipping {path} – cannot open ({e})")
               return False
 
-            # Partial loads tend to be much smaller or oddly sized, but be conservative
             h, w = arr.shape
             if h < 100 or w < 100:
               print(f"Skipping {path} – suspiciously small ({w}x{h})")
@@ -122,18 +121,16 @@ jobs:
             mean = float(arr.mean())
             std = float(arr.std())
 
-            # Heuristics:
-            # - Almost black or almost white
+            # Almost black or almost white
             if mean < 5 or mean > 250:
               print(f"Skipping {path} – mean too extreme (mean={mean:.1f})")
               return False
 
-            # - Very low contrast (flat grey / half-loaded)
+            # Very low contrast (flat grey / half-loaded)
             if std < 3:
               print(f"Skipping {path} – too little contrast (std={std:.2f})")
               return False
 
-            # - If >99.5% of pixels are within a tiny band, treat as bad
             low = arr.min()
             high = arr.max()
             if high - low < 5:
@@ -205,8 +202,6 @@ jobs:
             grid = [t_start + timedelta(seconds=i * nominal) for i in range(n_steps + 1)]
 
             # strictness: 0 = very forgiving, 1 = very strict
-            # control how far away in time we're willing to pick a frame
-            # at strictness=1, ~1 * nominal; at 0, allow ~5 * nominal
             max_dev_strict = nominal
             max_dev_loose = 5 * nominal
             max_dev = max_dev_loose + strictness * (max_dev_strict - max_dev_loose)
@@ -218,10 +213,8 @@ jobs:
 
             last_idx = 0
             for g in grid:
-              # advance pointer while time < grid
               while j + 1 < len(times) and times[j + 1] <= g:
                 j += 1
-              # Now candidate j is last <= g, and j+1 is next > g if exists
               best_idx = j
               best_dt = abs((times[j] - g).total_seconds())
               if j + 1 < len(times):
@@ -237,8 +230,7 @@ jobs:
                 # No nearby frame; hold last frame
                 seq_indices.append(last_idx)
 
-            # Optionally: prevent the sequence from being insanely long
-            # by lightly compressing duplicate runs based on strictness
+            # Compress duplicate runs based on strictness
             compressed = []
             i = 0
             while i < len(seq_indices):
@@ -248,8 +240,6 @@ jobs:
                 run_len += 1
 
               # keep between 1 and full run_len depending on strictness
-              # strictness=0  -> 1 frame
-              # strictness=1  -> full run
               keep = int(1 + strictness * (run_len - 1))
               for _ in range(keep):
                 compressed.append(idx)
@@ -273,8 +263,9 @@ jobs:
 
           with list_path.open("w", encoding="utf-8") as f:
             for p in seq_paths:
-              # absolute paths are safer here
-              f.write(f"file '{str(p.resolve()).replace(\"'\",\"'\\\\''\")}'\n")
+              real = str(p.resolve())
+              escaped = real.replace("'", "'\"'\"'")
+              f.write(f"file '{escaped}'\n")
 
           print(f"Frame list written to {list_path}")
           print(f"Output will be {out_path}")
@@ -298,12 +289,10 @@ jobs:
           subprocess.run(cmd, check=True)
           print(f"✅ Timelapse created at {out_path}")
 
-          # Export path for next step if needed
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as envf:
             envf.write(f"TIMELAPSE_PATH={out_path}\n")
           PYCODE
 
-      # Optional: publish as a Release asset (keeps repo light)
       - name: Upload timelapse to GitHub Release
         if: success()
         uses: softprops/action-gh-release@v2
