@@ -279,6 +279,7 @@ jobs:
               "-r", str(fps),          # input frame rate
               "-i", str(list_path),
               "-c:v", "libx264",
+              "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",  # force even dims for libx264
               "-pix_fmt", "yuv420p",
               "-r", str(fps),          # output frame rate
               str(out_path),
