@@ -21,10 +21,77 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Capture image immediately
+        run: |
+          set -e
+
+          URL="https://${CAMERA_HOST}${CAMERA_PATH}"
+
+          # Timestamp in Europe/Madrid for filename — recorded right now, before any git work
+          TS="$(TZ=Europe/Madrid date +'%y%m%d_%H%M%S')"
+          TMP_FILE="/tmp/captured_image_${TS}.jpg"
+
+          echo "===== Capture run at $TS ====="
+          echo "Target URL: $URL"
+          echo
+
+          capture_ok=false
+
+          # 1) Try normal DNS-based capture first
+          echo "Trying DNS-based capture..."
+          if curl -fSL \
+                --retry 2 \
+                --retry-delay 3 \
+                --connect-timeout 10 \
+                --max-time 20 \
+                -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
+                "$URL" -o "$TMP_FILE"; then
+            echo "✅ DNS-based capture succeeded."
+            capture_ok=true
+          else
+            echo "⚠️ DNS-based capture failed."
+            rm -f "$TMP_FILE" || true
+          fi
+
+          # 2) If that failed, resolve IP explicitly and retry
+          if [ "$capture_ok" = false ]; then
+            IP_TO_USE="$(getent ahostsv4 "${CAMERA_HOST}" | awk '{print $1; exit}' || true)"
+            if [ -n "$IP_TO_USE" ]; then
+              echo "Falling back to IP-based capture with ${IP_TO_USE}..."
+              if curl -fSL \
+                    --retry 2 \
+                    --retry-delay 3 \
+                    --connect-timeout 10 \
+                    --max-time 20 \
+                    --resolve "${CAMERA_HOST}:443:${IP_TO_USE}" \
+                    -H "Host: ${CAMERA_HOST}" \
+                    -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
+                    "$URL" -o "$TMP_FILE"; then
+                echo "✅ IP-based capture succeeded."
+                capture_ok=true
+              else
+                echo "⚠️ IP-based capture also failed."
+                rm -f "$TMP_FILE" || true
+              fi
+            else
+              echo "No IP available for fallback."
+            fi
+          fi
+
+          if [ "$capture_ok" = false ]; then
+            echo "❌ All capture attempts failed. No image saved this run."
+            exit 1
+          fi
+
+          ls -lh "$TMP_FILE" || true
+          echo "TS=$TS" >> "$GITHUB_ENV"
+          echo "TMP_FILE=$TMP_FILE" >> "$GITHUB_ENV"
+          echo "================================="
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
           persist-credentials: true
 
       - name: Load and refresh camera IP cache
@@ -46,7 +113,6 @@ jobs:
 
           if [ -n "$CUR_IP" ]; then
             echo "DNS resolved ${CAMERA_HOST} -> ${CUR_IP}"
-            # Update cache if changed
             if [ "$CUR_IP" != "$PREV_IP" ]; then
               echo "IP changed (${PREV_IP} -> ${CUR_IP}), updating cache."
             else
@@ -56,87 +122,21 @@ jobs:
           else
             echo "⚠️ DNS could not resolve ${CAMERA_HOST} this run."
             if [ -n "$PREV_IP" ]; then
-              echo "Will fall back to cached IP: ${PREV_IP}"
+              echo "Will use cached IP: ${PREV_IP}"
             else
               echo "No cached IP available either."
             fi
           fi
 
-          echo "PREV_IP=$PREV_IP" >> "$GITHUB_ENV"
-          echo "CUR_IP=$CUR_IP" >> "$GITHUB_ENV"
-
-      - name: Capture image (DNS first, IP fallback)
+      - name: Move captured image into repo
         run: |
           set -e
-
-          URL="https://${CAMERA_HOST}${CAMERA_PATH}"
           OUT_DIR="images_5min"
           mkdir -p "$OUT_DIR"
-
-          # Timestamp in Europe/Madrid for filename
-          TS="$(TZ=Europe/Madrid date +'%y%m%d_%H%M%S')"
-          OUT_FILE="${OUT_DIR}/image_${TS}.jpg"
-
-          echo "===== Capture run at $TS ====="
-          echo "Target URL: $URL"
-          echo "DNS IP: ${CUR_IP:-<none>}"
-          echo "Cached IP: ${PREV_IP:-<none>}"
-          echo
-
-          capture_ok=false
-
-          # 1) Try normal DNS-based capture first (what you asked for)
-          echo "Trying DNS-based capture first..."
-          if curl -fSL \
-                --retry 3 \
-                --retry-delay 5 \
-                --connect-timeout 10 \
-                --max-time 35 \
-                -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
-                "$URL" -o "$OUT_FILE"; then
-            echo "✅ DNS-based capture succeeded."
-            capture_ok=true
-          else
-            echo "⚠️ DNS-based capture failed."
-            rm -f "$OUT_FILE" || true
-          fi
-
-          # 2) If that failed, fall back to an explicit IP (cached or current)
-          if [ "$capture_ok" = false ]; then
-            IP_TO_USE="${CUR_IP:-$PREV_IP}"
-            if [ -n "$IP_TO_USE" ]; then
-              echo "Falling back to IP-based capture with ${IP_TO_USE}..."
-              if curl -fSL \
-                    --retry 3 \
-                    --retry-delay 5 \
-                    --connect-timeout 10 \
-                    --max-time 35 \
-                    --resolve "${CAMERA_HOST}:443:${IP_TO_USE}" \
-                    -H "Host: ${CAMERA_HOST}" \
-                    -A "SierraTimelapseBot/1.0 (+https://github.com/mmiiffii/Sierra-Timeplase)" \
-                    "$URL" -o "$OUT_FILE"; then
-                echo "✅ IP-based capture succeeded."
-                capture_ok=true
-              else
-                echo "⚠️ IP-based capture also failed."
-                rm -f "$OUT_FILE" || true
-              fi
-            else
-              echo "No IP available for fallback."
-            fi
-          fi
-
-          if [ "$capture_ok" = false ]; then
-            echo "❌ All capture attempts failed. No image saved this run."
-            # you can choose exit 0 if you prefer green runs even when missing frames
-            exit 1
-          fi
-
-          ls -lh "$OUT_FILE" || true
-          echo "================================="
+          cp "$TMP_FILE" "${OUT_DIR}/image_${TS}.jpg"
+          ls -lh "${OUT_DIR}/image_${TS}.jpg"
 
       - name: Commit and push new images + IP cache
-        if: success()    # only commit if capture step succeeded
         run: |
           set -e
           git config user.name "GitHub Actions"
