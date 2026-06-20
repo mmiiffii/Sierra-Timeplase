@@ -7,14 +7,18 @@ on:
         description: "Space-separated repo paths to migrate"
         required: true
         default: "images images_5min timelapses docs"
+      start_week:
+        description: "Skip images/Week 01..before this. Use 26 to start at Week 26. Use 0 to include all weeks."
+        required: true
+        default: "26"
       limit:
-        description: "Test limit. Use 10 for a small test, 0 for all files."
+        description: "Test limit. Use 10 for a small test, 0 for all selected files."
         required: true
         default: "0"
       skip_existing:
-        description: "Skip objects that already exist in R2"
+        description: "Slow safety check. false = overwrite keys without checking first."
         required: true
-        default: "true"
+        default: "false"
 
 permissions:
   contents: read
@@ -53,6 +57,7 @@ jobs:
           REF_NAME="${GITHUB_REF_NAME:-main}"
           PATHS="${{ github.event.inputs.paths }}"
           LIMIT="${{ github.event.inputs.limit }}"
+          START_WEEK="${{ github.event.inputs.start_week }}"
 
           git init repo-list
           cd repo-list
@@ -65,15 +70,31 @@ jobs:
           git ls-tree -r --name-only FETCH_HEAD -- $PATHS > ../files-all.txt || true
           cd ..
 
-          if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
-            head -n "$LIMIT" files-all.txt > files.txt
+          if [ "$START_WEEK" = "0" ]; then
+            cp files-all.txt files-filtered.txt
           else
-            cp files-all.txt files.txt
+            awk -v start="$START_WEEK" '
+              match($0, /^images\/Week ([0-9][0-9]) - /, m) {
+                if ((m[1] + 0) >= start) print;
+                next;
+              }
+              { print }
+            ' files-all.txt > files-filtered.txt
           fi
 
-          echo "Files selected:"
+          if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
+            head -n "$LIMIT" files-filtered.txt > files.txt
+          else
+            cp files-filtered.txt files.txt
+          fi
+
+          echo "All repo files found:"
+          wc -l files-all.txt
+          echo "Files after week filter:"
+          wc -l files-filtered.txt
+          echo "Files selected for this run:"
           wc -l files.txt
-          echo "First files:"
+          echo "First selected files:"
           head -20 files.txt || true
 
       - name: Stream each file from GitHub to R2
