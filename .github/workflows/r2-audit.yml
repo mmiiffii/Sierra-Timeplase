@@ -1,0 +1,88 @@
+name: R2 Bucket Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "audit = report only | delete-panorama-dupes = delete sierra-panorama-capture/ objects that also exist in sierra-timeplase/"
+        required: true
+        default: "audit"
+        type: choice
+        options:
+          - audit
+          - delete-panorama-dupes
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      ENDPOINT: "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+
+    steps:
+      - name: Ensure AWS CLI
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            python3 -m pip install --user awscli
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: List both prefixes
+        run: |
+          echo "=== Listing sierra-panorama-capture/ ==="
+          aws s3 ls "s3://${R2_BUCKET}/sierra-panorama-capture/" \
+            --recursive --endpoint-url "$ENDPOINT" \
+            | awk '{$1=$2=$3=""; sub(/^[[:space:]]+/, ""); print}' \
+            | sort > panorama.txt
+          echo "sierra-panorama-capture/ objects: $(wc -l < panorama.txt)"
+
+          echo "=== Listing sierra-timeplase/ ==="
+          aws s3 ls "s3://${R2_BUCKET}/sierra-timeplase/" \
+            --recursive --endpoint-url "$ENDPOINT" \
+            | awk '{$1=$2=$3=""; sub(/^[[:space:]]+/, ""); print}' \
+            | sort > timeplase.txt
+          echo "sierra-timeplase/ objects: $(wc -l < timeplase.txt)"
+
+      - name: Find duplicates (same relative path under each prefix)
+        run: |
+          # Strip the prefix so we compare relative paths
+          sed 's|^sierra-panorama-capture/||' panorama.txt | sort > panorama-rel.txt
+          sed 's|^sierra-timeplase/||'       timeplase.txt | sort > timeplase-rel.txt
+
+          # Files in BOTH
+          comm -12 panorama-rel.txt timeplase-rel.txt > dupes-rel.txt
+          echo "=== Duplicated in both prefixes: $(wc -l < dupes-rel.txt) files ==="
+          head -40 dupes-rel.txt || true
+
+          # Files ONLY in panorama-capture (not in timeplase)
+          comm -23 panorama-rel.txt timeplase-rel.txt > panorama-only.txt
+          echo ""
+          echo "=== Only in sierra-panorama-capture/ (not yet in timeplase): $(wc -l < panorama-only.txt) files ==="
+          head -20 panorama-only.txt || true
+
+          # Files ONLY in timeplase
+          comm -13 panorama-rel.txt timeplase-rel.txt > timeplase-only.txt
+          echo ""
+          echo "=== Only in sierra-timeplase/ (not in panorama): $(wc -l < timeplase-only.txt) files ==="
+          head -20 timeplase-only.txt || true
+
+      - name: Delete panorama-capture dupes (only if action = delete-panorama-dupes)
+        if: ${{ github.event.inputs.action == 'delete-panorama-dupes' }}
+        run: |
+          count=0
+          while IFS= read -r rel; do
+            key="sierra-panorama-capture/${rel}"
+            echo "Delete: s3://${R2_BUCKET}/${key}"
+            aws s3 rm "s3://${R2_BUCKET}/${key}" --endpoint-url "$ENDPOINT"
+            count=$((count + 1))
+          done < dupes-rel.txt
+          echo "Deleted ${count} duplicate objects from sierra-panorama-capture/"
