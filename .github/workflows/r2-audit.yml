@@ -1,0 +1,83 @@
+name: R2 Bucket Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to do"
+        required: true
+        default: "audit"
+        type: choice
+        options:
+          - audit
+          - delete-s3-junk
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      ENDPOINT: "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+
+    steps:
+      - name: Ensure AWS CLI
+        run: |
+          if ! command -v aws >/dev/null 2>&1; then
+            python3 -m pip install --user awscli
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Audit bucket top-level prefixes
+        run: |
+          echo "=== All top-level prefixes in bucket ==="
+          aws s3 ls "s3://${R2_BUCKET}/" --endpoint-url "$ENDPOINT"
+
+          echo ""
+          echo "=== sierra-timeplase/ object count ==="
+          aws s3 ls "s3://${R2_BUCKET}/sierra-timeplase/" \
+            --recursive --endpoint-url "$ENDPOINT" | wc -l
+
+          echo ""
+          echo "=== sierra-panorama-capture/ object count ==="
+          aws s3 ls "s3://${R2_BUCKET}/sierra-panorama-capture/" \
+            --recursive --endpoint-url "$ENDPOINT" | wc -l
+
+          echo ""
+          echo "=== Investigating s3:/ junk prefix (first 50 objects) ==="
+          aws s3 ls "s3://${R2_BUCKET}/s3:/" \
+            --recursive --endpoint-url "$ENDPOINT" \
+            | awk '{$1=$2=$3=""; sub(/^[[:space:]]+/, ""); print}' \
+            | head -50 || echo "(empty or does not exist)"
+
+          echo ""
+          echo "=== Total junk objects under s3:/ ==="
+          aws s3 ls "s3://${R2_BUCKET}/s3:/" \
+            --recursive --endpoint-url "$ENDPOINT" \
+            | wc -l || echo "0"
+
+      - name: Delete s3:/ junk prefix (only if action = delete-s3-junk)
+        if: ${{ github.event.inputs.action == 'delete-s3-junk' }}
+        run: |
+          echo "Collecting junk keys under s3:/..."
+          aws s3 ls "s3://${R2_BUCKET}/s3:/" \
+            --recursive --endpoint-url "$ENDPOINT" \
+            | awk '{$1=$2=$3=""; sub(/^[[:space:]]+/, ""); print}' > junk-keys.txt
+
+          count=0
+          while IFS= read -r key; do
+            [ -z "$key" ] && continue
+            echo "Delete: $key"
+            aws s3 rm "s3://${R2_BUCKET}/${key}" --endpoint-url "$ENDPOINT"
+            count=$((count + 1))
+          done < junk-keys.txt
+
+          echo "Deleted ${count} junk objects from s3:/ prefix"
