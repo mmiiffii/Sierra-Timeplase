@@ -7,18 +7,14 @@ on:
         description: "Space-separated repo paths to migrate"
         required: true
         default: "images images_5min timelapses docs"
-      start_week:
-        description: "Skip images/Week 01..before this. Use 26 to start at Week 26. Use 0 to include all weeks."
-        required: true
-        default: "26"
       limit:
-        description: "Test limit. Use 10 for a small test, 0 for all selected files."
+        description: "Test limit. Use 10 for a small test, 0 for all files."
         required: true
         default: "0"
       skip_existing:
-        description: "Slow safety check. false = overwrite keys without checking first."
+        description: "Skip objects that already exist in R2"
         required: true
-        default: "false"
+        default: "true"
 
 permissions:
   contents: read
@@ -57,7 +53,6 @@ jobs:
           REF_NAME="${GITHUB_REF_NAME:-main}"
           PATHS="${{ github.event.inputs.paths }}"
           LIMIT="${{ github.event.inputs.limit }}"
-          START_WEEK="${{ github.event.inputs.start_week }}"
 
           git init repo-list
           cd repo-list
@@ -70,32 +65,34 @@ jobs:
           git ls-tree -r --name-only FETCH_HEAD -- $PATHS > ../files-all.txt || true
           cd ..
 
-          if [ "$START_WEEK" = "0" ]; then
-            cp files-all.txt files-filtered.txt
-          else
-            awk -v start="$START_WEEK" '
-              match($0, /^images\/Week ([0-9][0-9]) - /, m) {
-                if ((m[1] + 0) >= start) print;
-                next;
-              }
-              { print }
-            ' files-all.txt > files-filtered.txt
-          fi
-
           if [ "$LIMIT" != "0" ] && [ -n "$LIMIT" ]; then
-            head -n "$LIMIT" files-filtered.txt > files.txt
+            head -n "$LIMIT" files-all.txt > files.txt
           else
-            cp files-filtered.txt files.txt
+            cp files-all.txt files.txt
           fi
 
-          echo "All repo files found:"
-          wc -l files-all.txt
-          echo "Files after week filter:"
-          wc -l files-filtered.txt
-          echo "Files selected for this run:"
+          echo "Files selected:"
           wc -l files.txt
-          echo "First selected files:"
+          echo "First files:"
           head -20 files.txt || true
+
+      - name: Build R2 index for fast skip-existing checks
+        run: |
+          set -euo pipefail
+
+          ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          SKIP_EXISTING="${{ github.event.inputs.skip_existing }}"
+
+          if [ "$SKIP_EXISTING" = "true" ]; then
+            echo "Fetching R2 object index for prefix: ${R2_PREFIX}/"
+            aws s3 ls "s3://${R2_BUCKET}/${R2_PREFIX}/" \
+              --recursive \
+              --endpoint-url "$ENDPOINT" \
+              | awk '{print $4}' > r2-index.txt
+            echo "R2 index size: $(wc -l < r2-index.txt) objects"
+          else
+            touch r2-index.txt
+          fi
 
       - name: Stream each file from GitHub to R2
         run: |
@@ -129,11 +126,7 @@ jobs:
             key="${R2_PREFIX}/${path}"
 
             if [ "$SKIP_EXISTING" = "true" ]; then
-              if aws s3api head-object \
-                --bucket "$R2_BUCKET" \
-                --key "$key" \
-                --endpoint-url "$ENDPOINT" >/dev/null 2>&1; then
-                echo "Skip existing: $key"
+              if grep -qxF "$key" r2-index.txt; then
                 skipped=$((skipped + 1))
                 continue
               fi
