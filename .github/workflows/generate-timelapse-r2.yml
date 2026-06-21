@@ -13,10 +13,10 @@ on:
         description: 'Output FPS (6 / 8 / 12 / 24)'
         required: false
         default: '12'
-      golden_hold:
-        description: 'Hold first + last hour of day 3× longer (sunrise/sunset linger)'
+      strictness:
+        description: '0 = all frames in order (ignore time gaps), 10 = strict real-time grid'
         required: false
-        default: 'true'
+        default: '5'
 
 permissions:
   contents: write
@@ -133,7 +133,7 @@ jobs:
       - name: Build timelapse
         env:
           FPS:         ${{ inputs.fps }}
-          GOLDEN_HOLD: ${{ inputs.golden_hold }}
+          STRICTNESS:  ${{ inputs.strictness }}
           DATE_FROM:   ${{ inputs.date_from }}
           DATE_TO:     ${{ inputs.date_to }}
         run: |
@@ -146,9 +146,10 @@ jobs:
           import numpy as np
           from PIL import Image
 
-          fps     = float(os.environ.get("FPS",         "12"))
-          golden  = os.environ.get("GOLDEN_HOLD","true").lower() in ("true","1","yes")
-          tz      = ZoneInfo("Europe/Madrid")
+          fps        = float(os.environ.get("FPS",    "12"))
+          strictness = int(os.environ.get("STRICTNESS", "5"))
+          strictness = max(0, min(10, strictness))
+          tz         = ZoneInfo("Europe/Madrid")
           start_h, end_h = 7, 20
 
           manifest = json.loads(Path("frames_manifest.json").read_text())
@@ -223,8 +224,8 @@ jobs:
           body: |
             **Camera:** Pradollano
             **Date range:** ${{ inputs.date_from }} → ${{ inputs.date_to }} (07:00–20:00 Madrid)
-            **Frame rate:** ${{ inputs.fps }} fps · Golden-hour hold: ${{ inputs.golden_hold }}
-            **Frames used:** ${{ env.TL_FRAMES }} · **Skipped (glitch/blank):** ${{ env.TL_SKIPPED }}
+            **Frame rate:** ${{ inputs.fps }} fps · Time strictness: ${{ inputs.strictness }}/10
+            **Strictness:** ${{ inputs.strictness }}/10 · **Frames used:** ${{ env.TL_FRAMES }} · **Skipped:** ${{ env.TL_SKIPPED }}
           files: ${{ env.TL_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
