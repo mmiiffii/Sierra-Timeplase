@@ -17,6 +17,14 @@ on:
         description: '0 = all frames in order (ignore time gaps), 10 = strict real-time grid'
         required: false
         default: '5'
+      interval:
+        description: 'Minutes between frames (5/10/15/30/60/120/240/360/720/1440)'
+        required: false
+        default: '10'
+      start_time:
+        description: 'Earliest time of day to include, HH:MM Madrid time (e.g. 07:00)'
+        required: false
+        default: '07:00'
 
 permissions:
   contents: write
@@ -44,8 +52,9 @@ jobs:
 
       - name: Fetch frames from R2
         env:
-          DATE_FROM: ${{ inputs.date_from }}
-          DATE_TO:   ${{ inputs.date_to }}
+          DATE_FROM:  ${{ inputs.date_from }}
+          DATE_TO:    ${{ inputs.date_to }}
+          START_TIME: ${{ inputs.start_time }}
         run: |
           mkdir -p frames
           python3 - << 'PY'
@@ -59,8 +68,11 @@ jobs:
           date_from = datetime.strptime(os.environ["DATE_FROM"], "%Y-%m-%d").replace(tzinfo=tz)
           date_to   = datetime.strptime(os.environ["DATE_TO"],   "%Y-%m-%d").replace(tzinfo=tz) \
                         .replace(hour=23, minute=59, second=59)
-          # Daytime window — hardcoded 07:00–20:00 Madrid
-          start_h, end_h = 7, 20
+          # Daytime window: start_h from input, fixed end at 20:00
+          _st       = os.environ.get("START_TIME", "07:00")
+          start_h   = int(_st.split(":")[0])
+          start_m   = int(_st.split(":")[1]) if ":" in _st else 0
+          end_h     = 20
           bucket   = os.environ["R2_BUCKET"]
           endpoint = os.environ["R2_ENDPOINT"]
           prefix   = "sierra-timeplase/images/"
@@ -106,7 +118,7 @@ jobs:
           to_dl = []
           for key in all_keys:
               dt = parse_dt(key)
-              if dt and date_from <= dt <= date_to and start_h <= dt.hour < end_h:
+              if dt and date_from <= dt <= date_to and (dt.hour > start_h or (dt.hour == start_h and dt.minute >= start_m)) and dt.hour < end_h:
                   local = Path("frames") / f"{len(to_dl):06d}_{dt.strftime('%Y%m%d_%H%M%S')}.jpg"
                   to_dl.append((dt, key, local))
           to_dl.sort()
@@ -134,6 +146,8 @@ jobs:
         env:
           FPS:         ${{ inputs.fps }}
           STRICTNESS:  ${{ inputs.strictness }}
+          INTERVAL:    ${{ inputs.interval }}
+          START_TIME:  ${{ inputs.start_time }}
           DATE_FROM:   ${{ inputs.date_from }}
           DATE_TO:     ${{ inputs.date_to }}
         run: |
@@ -146,11 +160,14 @@ jobs:
           import numpy as np
           from PIL import Image
 
-          fps        = float(os.environ.get("FPS",    "12"))
-          strictness = int(os.environ.get("STRICTNESS", "5"))
+          fps        = float(os.environ.get("FPS",       "12"))
+          strictness = int(os.environ.get("STRICTNESS",  "5"))
           strictness = max(0, min(10, strictness))
+          interval_m = int(os.environ.get("INTERVAL",   "10"))
+          _st        = os.environ.get("START_TIME", "07:00")
+          start_h    = int(_st.split(":")[0])
+          end_h      = 20
           tz         = ZoneInfo("Europe/Madrid")
-          start_h, end_h = 7, 20
 
           manifest = json.loads(Path("frames_manifest.json").read_text())
           frames   = [(datetime.fromisoformat(ts), Path(p)) for ts, p in manifest]
@@ -181,6 +198,18 @@ jobs:
           print(f"Usable: {len(good)}, skipped: {skipped}")
           if not good:
               raise SystemExit("No usable frames after glitch filtering.")
+
+          # Interval sampling: keep one frame per interval_m minutes
+          if interval_m > 10 and len(good) > 1:
+              from datetime import timedelta as TD
+              interval = TD(minutes=interval_m)
+              sampled, last_kept = [], None
+              for dt, path in good:
+                  if last_kept is None or dt >= last_kept + interval:
+                      sampled.append((dt, path))
+                      last_kept = dt
+              print(f"Interval sampling ({interval_m}min): {len(sampled)} frames (was {len(good)})")
+              good = sampled
 
           # Build ffmpeg concat list with per-frame durations
           normal = 1.0 / fps
@@ -223,9 +252,9 @@ jobs:
           name: "Pradollano · ${{ inputs.date_from }} → ${{ inputs.date_to }} · ${{ inputs.fps }}fps"
           body: |
             **Camera:** Pradollano
-            **Date range:** ${{ inputs.date_from }} → ${{ inputs.date_to }} (07:00–20:00 Madrid)
-            **Frame rate:** ${{ inputs.fps }} fps · Time strictness: ${{ inputs.strictness }}/10
-            **Strictness:** ${{ inputs.strictness }}/10 · **Frames used:** ${{ env.TL_FRAMES }} · **Skipped:** ${{ env.TL_SKIPPED }}
+            **Date range:** ${{ inputs.date_from }} → ${{ inputs.date_to }} (from ${{ inputs.start_time }} Madrid)
+            **Interval:** ${{ inputs.interval }}min · **FPS:** ${{ inputs.fps }} · **Strictness:** ${{ inputs.strictness }}/10
+            **Frames used:** ${{ env.TL_FRAMES }} · **Skipped:** ${{ env.TL_SKIPPED }}
           files: ${{ env.TL_PATH }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
