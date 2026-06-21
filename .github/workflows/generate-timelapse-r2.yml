@@ -39,7 +39,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y ffmpeg awscli
+          sudo apt-get install -y ffmpeg
           pip install pillow numpy
 
       - name: Fetch frames from R2
