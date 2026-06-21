@@ -1,0 +1,59 @@
+name: Worker Cron Health Check
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"  # Every 5 minutes
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  health-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if Worker cron is alive
+        env:
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: |
+          TIMESTAMP=$(aws s3api head-object \
+            --bucket "$R2_BUCKET" \
+            --key "sierra-timeplase/state/pradollano.sha1" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --query 'LastModified' --output text)
+          
+          LAST_UPDATE=$(date -d "$TIMESTAMP" +%s)
+          NOW=$(date +%s)
+          AGE=$((NOW - LAST_UPDATE))
+          THRESHOLD=$((15 * 60))  # 15 minutes
+          
+          echo "State file last updated: $TIMESTAMP (${AGE}s ago)"
+          
+          if [ $AGE -gt $THRESHOLD ]; then
+            echo "❌ CRON IS DEAD - last capture was ${AGE}s ago (> 15 min)"
+            echo "Attempting re-deploy..."
+            exit 1  # Trigger email notification
+          else
+            echo "✅ Cron is healthy (${AGE}s ago)"
+            exit 0
+          fi
+
+      - name: Re-deploy Worker if health check failed
+        if: failure()
+        uses: actions/checkout@v4
+        with:
+          repository: mmiiffii/sierra-r2-migration-kit
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Deploy with Wrangler
+        if: failure()
+        run: |
+          cd worker
+          npm install -g wrangler
+          wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
