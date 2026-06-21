@@ -211,16 +211,26 @@ jobs:
               print(f"Interval sampling ({interval_m}min): {len(sampled)} frames (was {len(good)})")
               good = sampled
 
-          # Build ffmpeg concat list with per-frame durations
-          normal = 1.0 / fps
-          hold   = 3.0 / fps   # golden-hour frames linger 3×
+          # Build ffmpeg concat list with time-strictness
+          # strictness=0: equal duration per frame; strictness=10: gaps held proportionally (max 8×)
+          from statistics import median as _med
+          dts = [dt for dt, _ in good]
+          if strictness == 0 or len(dts) < 2:
+              gaps = [1.0] * len(good)
+          else:
+              raw_gaps = [(dts[i+1] - dts[i]).total_seconds() for i in range(len(dts)-1)]
+              raw_gaps.append(raw_gaps[-1] if raw_gaps else 1.0)
+              nominal = max(60, _med(raw_gaps))
+              ratio   = strictness / 10.0
+              gaps = [max(0.5, 1.0 + ratio * (min(g / nominal, 8.0) - 1.0)) for g in raw_gaps]
+              mean_g = sum(gaps) / len(gaps)
+              gaps   = [g / mean_g for g in gaps]
 
+          base_dur = 1.0 / fps
           lines = []
-          for dt, path in good:
-              is_golden = golden and (dt.hour == start_h or dt.hour == end_h - 1)
-              dur = hold if is_golden else normal
+          for (dt, path), gap in zip(good, gaps):
               esc = str(path.resolve()).replace("'", r"'\''")
-              lines += [f"file '{esc}'", f"duration {dur:.6f}"]
+              lines += [f"file '{esc}'", f"duration {base_dur * gap:.6f}"]
 
           concat = Path("timelapses/frames.txt")
           concat.write_text("\n".join(lines))
