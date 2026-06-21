@@ -3,24 +3,18 @@ name: Generate Timelapse from R2
 on:
   workflow_dispatch:
     inputs:
-      days:
-        description: 'Days to look back (Madrid time)'
-        required: false
-        default: '7'
+      date_from:
+        description: 'Start date (YYYY-MM-DD, Madrid time, inclusive)'
+        required: true
+      date_to:
+        description: 'End date (YYYY-MM-DD, Madrid time, inclusive)'
+        required: true
       fps:
-        description: 'Output FPS — 6 / 8 / 12 / 24'
+        description: 'Output FPS (6 / 8 / 12 / 24)'
         required: false
         default: '12'
-      start_hour:
-        description: 'Earliest hour to include (0-23, Madrid time)'
-        required: false
-        default: '7'
-      end_hour:
-        description: 'Latest hour to include (0-23, Madrid time)'
-        required: false
-        default: '20'
       golden_hold:
-        description: 'Hold first + last hour frames 3× longer (sunrise/sunset linger)'
+        description: 'Hold first + last hour of day 3× longer (sunrise/sunset linger)'
         required: false
         default: 'true'
 
@@ -50,9 +44,8 @@ jobs:
 
       - name: Fetch frames from R2
         env:
-          DAYS: ${{ inputs.days }}
-          START_HOUR: ${{ inputs.start_hour }}
-          END_HOUR: ${{ inputs.end_hour }}
+          DATE_FROM: ${{ inputs.date_from }}
+          DATE_TO:   ${{ inputs.date_to }}
         run: |
           mkdir -p frames
           python3 - << 'PY'
@@ -63,32 +56,35 @@ jobs:
           from concurrent.futures import ThreadPoolExecutor
 
           tz        = ZoneInfo("Europe/Madrid")
-          days      = int(os.environ["DAYS"])
-          start_h   = int(os.environ.get("START_HOUR", "7"))
-          end_h     = int(os.environ.get("END_HOUR",   "20"))
-          bucket    = os.environ["R2_BUCKET"]
-          endpoint  = os.environ["R2_ENDPOINT"]
-          prefix    = "sierra-timeplase/images/"
-          now       = datetime.now(tz)
-          cutoff    = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
-          re6       = re.compile(r"_(\d{6})_(\d{6})\.jpg$", re.I)
-          re8       = re.compile(r"_(\d{8})_(\d{6})\.jpg$", re.I)
+          date_from = datetime.strptime(os.environ["DATE_FROM"], "%Y-%m-%d").replace(tzinfo=tz)
+          date_to   = datetime.strptime(os.environ["DATE_TO"],   "%Y-%m-%d").replace(tzinfo=tz) \
+                        .replace(hour=23, minute=59, second=59)
+          # Daytime window — hardcoded 07:00–20:00 Madrid
+          start_h, end_h = 7, 20
+          bucket   = os.environ["R2_BUCKET"]
+          endpoint = os.environ["R2_ENDPOINT"]
+          prefix   = "sierra-timeplase/images/"
+
+          re6 = re.compile(r"_(\d{6})_(\d{6})\.jpg$", re.I)
+          re8 = re.compile(r"_(\d{8})_(\d{6})\.jpg$", re.I)
 
           def parse_dt(key):
               fname = key.split("/")[-1]
               m8 = re8.search(fname)
               if m8:
                   try:
-                      return datetime.strptime("20" + m8.group(1)[2:] + m8.group(2), "%Y%m%d%H%M%S").replace(tzinfo=tz)
+                      return datetime.strptime("20" + m8.group(1)[2:] + m8.group(2),
+                                               "%Y%m%d%H%M%S").replace(tzinfo=tz)
                   except: pass
               m6 = re6.search(fname)
               if m6:
                   try:
-                      return datetime.strptime("20" + m6.group(1) + m6.group(2), "%Y%m%d%H%M%S").replace(tzinfo=tz)
+                      return datetime.strptime("20" + m6.group(1) + m6.group(2),
+                                               "%Y%m%d%H%M%S").replace(tzinfo=tz)
                   except: pass
               return None
 
-          # List all objects
+          # List all objects under prefix
           all_keys, token = [], None
           while True:
               cmd = ["aws","s3api","list-objects-v2","--bucket",bucket,"--prefix",prefix,
@@ -96,7 +92,7 @@ jobs:
               if token:
                   cmd += ["--continuation-token", token]
               data = json.loads(subprocess.run(cmd, capture_output=True, text=True).stdout)
-              for o in data.get("Contents",[]):
+              for o in data.get("Contents", []):
                   if o["Key"].lower().endswith(".jpg"):
                       all_keys.append(o["Key"])
               if data.get("IsTruncated"):
@@ -104,45 +100,42 @@ jobs:
               else:
                   break
 
-          print(f"Total objects in R2: {len(all_keys)}")
+          print(f"Total R2 objects: {len(all_keys)}")
 
-          # Filter to date+hour window
+          # Filter to date range + daytime window
           to_dl = []
           for key in all_keys:
               dt = parse_dt(key)
-              if dt and dt >= cutoff and start_h <= dt.hour < end_h:
-                  idx  = len(to_dl)
-                  local = Path("frames") / f"{idx:06d}_{dt.strftime('%Y%m%d_%H%M%S')}.jpg"
+              if dt and date_from <= dt <= date_to and start_h <= dt.hour < end_h:
+                  local = Path("frames") / f"{len(to_dl):06d}_{dt.strftime('%Y%m%d_%H%M%S')}.jpg"
                   to_dl.append((dt, key, local))
           to_dl.sort()
-          print(f"Frames in window: {len(to_dl)}")
+          print(f"Frames in range {os.environ['DATE_FROM']} → {os.environ['DATE_TO']}: {len(to_dl)}")
 
           if not to_dl:
-              raise SystemExit("No frames found — check date range and secrets.")
+              raise SystemExit("No frames found for this date range.")
 
           def dl(item):
               dt, key, local = item
-              r = subprocess.run(
-                  ["aws","s3","cp", f"s3://{bucket}/{key}", str(local),
-                   "--endpoint-url", endpoint, "--quiet"],
-                  capture_output=True)
+              r = subprocess.run(["aws","s3","cp", f"s3://{bucket}/{key}", str(local),
+                                  "--endpoint-url", endpoint, "--quiet"], capture_output=True)
               return r.returncode == 0
 
           with ThreadPoolExecutor(max_workers=24) as ex:
-              results = list(ex.map(dl, to_dl))
-          print(f"Downloaded {sum(results)}/{len(to_dl)} frames")
+              ok = sum(ex.map(dl, to_dl))
+          print(f"Downloaded {ok}/{len(to_dl)} frames")
 
-          manifest = [(dt.isoformat(), str(local)) for dt, _, local in to_dl]
-          Path("frames_manifest.json").write_text(json.dumps(manifest))
+          Path("frames_manifest.json").write_text(
+              json.dumps([(dt.isoformat(), str(local)) for dt, _, local in to_dl])
+          )
           PY
 
       - name: Build timelapse
         env:
           FPS:         ${{ inputs.fps }}
-          START_HOUR:  ${{ inputs.start_hour }}
-          END_HOUR:    ${{ inputs.end_hour }}
           GOLDEN_HOLD: ${{ inputs.golden_hold }}
-          DAYS:        ${{ inputs.days }}
+          DATE_FROM:   ${{ inputs.date_from }}
+          DATE_TO:     ${{ inputs.date_to }}
         run: |
           mkdir -p timelapses
           python3 - << 'PY'
@@ -154,11 +147,9 @@ jobs:
           from PIL import Image
 
           fps     = float(os.environ.get("FPS",         "12"))
-          start_h = int(os.environ.get("START_HOUR",     "7"))
-          end_h   = int(os.environ.get("END_HOUR",      "20"))
           golden  = os.environ.get("GOLDEN_HOLD","true").lower() in ("true","1","yes")
-          days    = int(os.environ.get("DAYS",            "7"))
           tz      = ZoneInfo("Europe/Madrid")
+          start_h, end_h = 7, 20
 
           manifest = json.loads(Path("frames_manifest.json").read_text())
           frames   = [(datetime.fromisoformat(ts), Path(p)) for ts, p in manifest]
@@ -170,11 +161,10 @@ jobs:
                   h, w = arr.shape
                   if h < 100 or w < 100: return True
                   mean, std = arr.mean(), arr.std()
-                  if mean < 5 or mean > 250: return True   # black / white
-                  if std < 8:               return True   # flat grey (no-signal)
+                  if mean < 5 or mean > 250: return True
+                  if std < 8:               return True
                   if arr.max() - arr.min() < 20: return True
-                  # Half-blank check (partial frame load)
-                  lm, rm = arr[:, :w//2].mean(), arr[:, w//2:].mean()
+                  lm = arr[:, :w//2].mean(); rm = arr[:, w//2:].mean()
                   if abs(lm - rm) > 60 and (min(lm, rm) < 15 or max(lm, rm) > 240):
                       return True
                   return False
@@ -183,18 +173,17 @@ jobs:
 
           good, skipped = [], 0
           for dt, path in frames:
-              if not path.exists():  skipped += 1; continue
-              if is_glitched(path):  skipped += 1; print(f"  skip: {path.name}"); continue
+              if not path.exists():    skipped += 1; continue
+              if is_glitched(path):   skipped += 1; print(f"  skip {path.name}"); continue
               good.append((dt, path))
 
           print(f"Usable: {len(good)}, skipped: {skipped}")
           if not good:
-              raise SystemExit("No usable frames.")
+              raise SystemExit("No usable frames after glitch filtering.")
 
           # Build ffmpeg concat list with per-frame durations
-          # Normal duration = 1/fps; golden-hour (first + last hour of window) = 3x
           normal = 1.0 / fps
-          hold   = 3.0 / fps
+          hold   = 3.0 / fps   # golden-hour frames linger 3×
 
           lines = []
           for dt, path in good:
@@ -206,22 +195,19 @@ jobs:
           concat = Path("timelapses/frames.txt")
           concat.write_text("\n".join(lines))
 
+          date_from = os.environ["DATE_FROM"].replace("-","")
+          date_to   = os.environ["DATE_TO"].replace("-","")
           stamp = datetime.now(tz).strftime("%Y%m%d_%H%M%S")
-          out   = Path(f"timelapses/pradollano_{days}d_{int(fps)}fps_{stamp}.mp4")
+          out   = Path(f"timelapses/pradollano_{date_from}-{date_to}_{int(fps)}fps_{stamp}.mp4")
 
-          cmd = [
-              "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat),
-              "-vsync", "vfr",
-              "-c:v", "libx264", "-crf", "20", "-preset", "fast",
-              "-vf",  "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-              "-pix_fmt", "yuv420p",
-              str(out),
-          ]
+          cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",str(concat),
+                 "-vsync","vfr","-c:v","libx264","-crf","20","-preset","fast",
+                 "-vf","scale=trunc(iw/2)*2:trunc(ih/2)*2","-pix_fmt","yuv420p",str(out)]
           print("ffmpeg:", " ".join(cmd))
           subprocess.run(cmd, check=True)
 
-          size_mb = out.stat().st_size / 1024**2
-          print(f"Done: {out.name}  ({size_mb:.1f} MB)")
+          size_mb = round(out.stat().st_size / 1024**2, 1)
+          print(f"Done: {out.name}  ({size_mb} MB)")
 
           with open(os.environ["GITHUB_ENV"], "a") as f:
               f.write(f"TL_PATH={out}\n")
@@ -233,10 +219,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: "timelapse-${{ github.run_id }}"
-          name: "Pradollano · ${{ inputs.days }}d · ${{ inputs.fps }}fps"
+          name: "Pradollano · ${{ inputs.date_from }} → ${{ inputs.date_to }} · ${{ inputs.fps }}fps"
           body: |
             **Camera:** Pradollano
-            **Period:** Last ${{ inputs.days }} days · ${{ inputs.start_hour }}:00–${{ inputs.end_hour }}:00 Madrid time
+            **Date range:** ${{ inputs.date_from }} → ${{ inputs.date_to }} (07:00–20:00 Madrid)
             **Frame rate:** ${{ inputs.fps }} fps · Golden-hour hold: ${{ inputs.golden_hold }}
             **Frames used:** ${{ env.TL_FRAMES }} · **Skipped (glitch/blank):** ${{ env.TL_SKIPPED }}
           files: ${{ env.TL_PATH }}
