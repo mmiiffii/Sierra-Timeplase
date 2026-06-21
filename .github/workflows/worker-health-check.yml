@@ -2,7 +2,7 @@ name: Worker Cron Health Check
 
 on:
   schedule:
-    - cron: "*/5 * * * *"  # Every 5 minutes
+    - cron: "*/15 * * * *"  # Every 15 minutes
   workflow_dispatch:
 
 permissions:
@@ -12,48 +12,55 @@ jobs:
   health-check:
     runs-on: ubuntu-latest
     steps:
-      - name: Check if Worker cron is alive
+      - name: Check Worker heartbeat
+        id: heartbeat
         env:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
+          set -euo pipefail
+
           TIMESTAMP=$(aws s3api head-object \
             --bucket "$R2_BUCKET" \
-            --key "sierra-timeplase/state/pradollano.sha1" \
+            --key "_heartbeat.txt" \
             --endpoint-url "$R2_ENDPOINT" \
-            --query 'LastModified' --output text)
-          
-          LAST_UPDATE=$(date -d "$TIMESTAMP" +%s)
-          NOW=$(date +%s)
-          AGE=$((NOW - LAST_UPDATE))
-          THRESHOLD=$((15 * 60))  # 15 minutes
-          
-          echo "State file last updated: $TIMESTAMP (${AGE}s ago)"
-          
-          if [ $AGE -gt $THRESHOLD ]; then
-            echo "❌ CRON IS DEAD - last capture was ${AGE}s ago (> 15 min)"
-            echo "Attempting re-deploy..."
-            exit 1  # Trigger email notification
-          else
-            echo "✅ Cron is healthy (${AGE}s ago)"
+            --query 'LastModified' --output text 2>/dev/null || echo "missing")
+
+          if [ "$TIMESTAMP" = "missing" ]; then
+            echo "⚠️  Heartbeat file not found in R2 — Worker may never have run"
+            echo "dead=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-      - name: Re-deploy Worker if health check failed
-        if: failure()
-        uses: actions/checkout@v4
-        with:
-          repository: mmiiffii/sierra-r2-migration-kit
-          token: ${{ secrets.GITHUB_TOKEN }}
+          LAST_UPDATE=$(date -d "$TIMESTAMP" +%s)
+          NOW=$(date +%s)
+          AGE=$((NOW - LAST_UPDATE))
+          # Flag as dead after 2 missed cron ticks (20 min)
+          THRESHOLD=$((20 * 60))
 
-      - name: Deploy with Wrangler
-        if: failure()
+          echo "Heartbeat last written: $TIMESTAMP (${AGE}s ago)"
+
+          if [ "$AGE" -gt "$THRESHOLD" ]; then
+            echo "❌ CRON appears dead — heartbeat is ${AGE}s old (> 20 min)"
+            echo "dead=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "✅ Cron is healthy — heartbeat ${AGE}s ago"
+            echo "dead=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger manual capture if cron is dead
+        if: steps.heartbeat.outputs.dead == 'true'
         run: |
-          cd worker
-          npm install -g wrangler
-          wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          set -euo pipefail
+          echo "Triggering /run-now to kick a missed capture..."
+          HTTP_STATUS=$(curl -sS -o /tmp/run-now-response.txt -w "%{http_code}" \
+            --max-time 90 \
+            "https://sn.casakobe.com/run-now")
+          echo "HTTP $HTTP_STATUS — $(cat /tmp/run-now-response.txt)"
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "❌ /run-now returned HTTP $HTTP_STATUS — Worker may be broken, manual action needed"
+            exit 1
+          fi
+          echo "✅ Manual capture triggered — cron will resume on next schedule tick"
