@@ -37,7 +37,6 @@ jobs:
           LAST_UPDATE=$(date -d "$TIMESTAMP" +%s)
           NOW=$(date +%s)
           AGE=$((NOW - LAST_UPDATE))
-          # Flag as dead after 2 missed cron ticks (20 min)
           THRESHOLD=$((20 * 60))
 
           echo "Heartbeat last written: $TIMESTAMP (${AGE}s ago)"
@@ -52,12 +51,16 @@ jobs:
 
       - name: Trigger manual capture if cron is dead
         if: steps.heartbeat.outputs.dead == 'true'
+        env:
+          WORKER_RUN_NOW_TOKEN: ${{ secrets.WORKER_RUN_NOW_TOKEN }}
         run: |
           set -euo pipefail
           echo "Triggering /run-now to kick a missed capture..."
+          # Use workers.dev URL to bypass bot protection on the custom domain
           HTTP_STATUS=$(curl -sS -o /tmp/run-now-response.txt -w "%{http_code}" \
             --max-time 90 \
-            "https://sn.casakobe.com/run-now")
+            -H "Authorization: Bearer ${WORKER_RUN_NOW_TOKEN}" \
+            "https://sierra-webcam-capture.mifidj.workers.dev/run-now")
           echo "HTTP $HTTP_STATUS — $(cat /tmp/run-now-response.txt)"
           if [ "$HTTP_STATUS" != "200" ]; then
             echo "❌ /run-now returned HTTP $HTTP_STATUS — Worker may be broken, manual action needed"
